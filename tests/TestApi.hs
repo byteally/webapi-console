@@ -10,6 +10,7 @@ import Data.Text
 import Data.Aeson
 import Data.Proxy
 import WebApi.Console
+import Network.URI
 
 data TestApp
 
@@ -31,7 +32,13 @@ data User = User
   { userId :: Int
   , userName :: Text
   , userAge :: Int
+  , userType :: UserType
   } deriving (Show, Eq, Generic, ToJSON, FromJSON)
+
+data UserType = Nobody Int | Normal Int | Admin Int
+  deriving (Show, Eq, Generic, ToJSON, FromJSON)
+
+instance ToParam UserType 'QueryParam
 
 instance ToParam UserQuery 'QueryParam
 instance ToParam User 'QueryParam
@@ -44,8 +51,9 @@ instance ApiContract TestApp GET ProfileR where
   type QueryParam GET ProfileR = User
   type ApiOut GET ProfileR = ()
 
+instance ToWidget UserType
 instance ToWidget UserQuery
 instance ToWidget User
 
 consoleApp :: IO ()
-consoleApp = apiConsole (ConsoleConfig undefined) (Proxy :: Proxy TestApp)
+consoleApp = apiConsole (ConsoleConfig (URI "http:" (Just (URIAuth "" "localhost" ":9000")) "" "" "")) (Proxy :: Proxy TestApp)

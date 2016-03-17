@@ -1,11 +1,14 @@
 {-# LANGUAGE OverloadedStrings, KindSignatures, DataKinds, TypeOperators, TypeFamilies, GADTs, ScopedTypeVariables, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances, OverloadedLists, DefaultSignatures, StandaloneDeriving #-}
+{-# LANGUAGE RecursiveDo #-}
 -- | 
 
 module WebApi.Console where
 
 import Data.JSString ()
+import qualified Data.Map as M
+import Data.Maybe
 import GHCJS.Types
-import Reflex.Dom
+import Reflex.Dom as RD
 import Data.Proxy
 import Data.Aeson as A
 import Data.Typeable
@@ -13,15 +16,20 @@ import WebApi
 import GHC.Exts
 import Network.URI
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as ASCII
 import qualified Data.Text as T
 import Data.Text (Text)
-import Data.Text.Encoding (decodeUtf8)
+import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import qualified Data.Map.Lazy as LM
 import Network.HTTP.Types
 import Network.HTTP.Types.URI
 import Network.URI
 import Control.Monad
 import GHC.Generics
+import WebApi.PageTemplate
+import Data.Map (Map)
+import Debug.Trace
+import Reflex.Utils
 
 foreign import javascript unsafe "console.log($1)" js_log :: JSString -> IO ()
 
@@ -95,16 +103,18 @@ apiConsole config api = do
               pathSegs = mkPathFormatString pxyR
           in ( singMethod pxyM
              , routeTpl
-             , paramWidget api pxyM pxyR pathSegs
+             , paramWidget api pxyM pxyR (baseURI config) pathSegs
              ) : (getPathSegs rs)
       getPathSegs RouteNil           = []
       routeSegs = getPathSegs routes
       getPathParPxy :: Typeable (PathParam m r) => Proxy m -> Proxy r -> Proxy (PathParam m r)
       getPathParPxy _ _ = Proxy
-  mainWidget $ do
-    el "div" $ text "Welcome to WebApi console"
-    tabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $  
-      \(m, r, paramWid) -> ((show (m, r)), ((show (m, r)), void paramWid))
+  mainWidgetWithHead pageTemplate $ do
+    el "main" $ do
+        el "h1" $ text "Api Console"
+        divClass "apiconsole" $ do
+            dropdownTabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $  
+              \(m, r, paramWid) -> ((show (m, r)), ((show (m, r)), void paramWid))
     return ()
 
 getDynTyRep :: Typeable a => Proxy a -> [Text]
@@ -129,41 +139,67 @@ paramWidget ::  forall t m meth r api.
                , ToWidget (CookieIn meth r)
                , ToPathParamWidget (PathParam meth r) (IsTuple (PathParam meth r))
                , ConsoleCtx api meth r
-               ) => Proxy api -> Proxy meth -> Proxy r -> [PathSegment] -> m (Event t ())
-paramWidget api meth r pathSegs = do
-  let pthWidget   = pathWidget meth r pathSegs
-      queryWidget = toWidget (Proxy :: Proxy (QueryParam meth r))
-      formWidget :: m (Dynamic t (FormParam meth r))
-      formWidget  = toWidget (Proxy :: Proxy (FormParam meth r))
-      headWidget :: m (Dynamic t (HeaderIn meth r))
-      headWidget  = toWidget (Proxy :: Proxy (HeaderIn meth r))
-      fileWidget :: m (Dynamic t (FileParam meth r))
-      fileWidget  = toWidget (Proxy :: Proxy (FileParam meth r))
-      cookWidget :: m (Dynamic t (CookieIn meth r))
-      cookWidget  = toWidget (Proxy :: Proxy (CookieIn meth r))
-      methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)        
-  (requestDyn :: Dynamic t (Request meth r)) <- join ((combineDyn7 Req)
-                                                    <$> pthWidget
-                                                    <*> queryWidget
-                                                    <*> formWidget
-                                                    <*> fileWidget
-                                                    <*> headWidget
-                                                    <*> cookWidget
-                                                    <*> (return methDyn)
-                                                   )
-  let linkDyn = mapDyn (\req -> show $ WebApi.link (undefined :: meth, undefined :: r) nullURI (pathParam req) (Just $ queryParam req)) requestDyn
-  formParMapDyn <- mapDyn (toFormParam . formParam) requestDyn
-  encodedFormParDyn <- mapDyn (renderSimpleQuery False) formParMapDyn
-  tabDisplay "params-tab" "param-tab" [ ("1-query" :: Text, ("Query Param", void queryWidget))
-                                      , ("2-form", ("Form Param", void formWidget))
-                                      , ("3-header", ("Request Header", void headWidget))
-                                      , ("4-file", ("File Param", void fileWidget))
-                                      , ("5-cookie", ("Cookie In", void cookWidget))
-                                      , ("6-path", ("Path Param", void pthWidget))
-                                      ]
-  dynText =<< linkDyn
-  display encodedFormParDyn
-  button "Fire"
+               ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> m (Event t ())
+paramWidget api meth r baseUrl pathSegs = divClass "" $ do
+  onReq <- divClass "request-form" $ do
+    let methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)        
+    rec 
+      divClass "request-url" $ dynText urlDyn
+      (urlDyn, encodedFormParDyn) <- divClass "params" $ do
+        queryWidget <- el "div" $ do
+          divClass "param-type" $ text "Query Params"
+          toWidget (Proxy :: Proxy (QueryParam meth r))
+        formWidget <- el "div" $ do
+          divClass "param-type" $ text "Form Params"
+          toWidget (Proxy :: Proxy (FormParam meth r))
+        pthWidget <- el "div" $ do
+          divClass "param-type" $ text "Path Params"
+          pathWidget meth r pathSegs
+        headWidget <- el "div" $ do
+          divClass "param-type" $ text "Headers"
+          toWidget (Proxy :: Proxy (HeaderIn meth r))
+        fileWidget <- el "div" $ do
+          divClass "param-type" $ text "Files"
+          toWidget (Proxy :: Proxy (FileParam meth r))
+        cookWidget <- el "div" $ do
+          divClass "param-type" $ text "Cookies"
+          toWidget (Proxy :: Proxy (CookieIn meth r))
+        (requestDyn :: Dynamic t (Maybe (Request meth r))) <- combineDyn7 mkReq
+                                                                pthWidget
+                                                                queryWidget
+                                                                formWidget
+                                                                fileWidget
+                                                                headWidget
+                                                                cookWidget
+                                                                methDyn
+        formParMapDyn <- mapDyn (fmap (toFormParam . formParam)) requestDyn
+        encodedFormParDyn <- mapDyn ((fromMaybe "") . fmap (renderSimpleQuery False)) formParMapDyn
+        linkDyn <- mapDyn ((fromMaybe "") . (fmap (\req -> show $ WebApi.link (undefined :: meth, undefined :: r) baseUrl (pathParam req) (Just $ queryParam req)))) requestDyn
+        return (linkDyn, encodedFormParDyn)
+      -- display encodedFormParDyn
+    divClass "submit-button" $ do
+      fire <- button "Fire"
+      return $ tag (pull $ mkXhrReq methDyn urlDyn encodedFormParDyn) fire
+  divClass "response" $ do
+    text "Response"
+    res <- performRequestAsync onReq
+    status <- holdDyn "" (fmap (show . _xhrResponse_status) res)
+    divClass "" $ do
+      text "status: "
+      dynText status
+    (responseText :: Dynamic t (Maybe Text)) <- holdDyn Nothing (fmap (_xhrResponse_responseText) res)
+    divClass "" $ do
+      text "response: "
+      display responseText
+  return $ tag (constant ()) onReq
+  where
+    mkReq pw qw fw fiw hw cw md = Req <$> pw 
+                                      <*> qw
+                                      <*> fw
+                                      <*> fiw
+                                      <*> hw
+                                      <*> cw
+                                      <*> pure md
 
 newtype PathPar t a (isTup :: Bool) = PathPar
   { getPathPar :: ([PathSegment] -> (Dynamic t a)) }
@@ -177,74 +213,170 @@ pathWidget :: forall t m meth r.
              ( MonadWidget t m
              , ToPathParamWidget
                         (PathParam meth r) (IsTuple (PathParam meth r))
-             ) => Proxy meth -> Proxy r -> [PathSegment] -> m (Dynamic t (PathParam meth r))
+             ) => Proxy meth -> Proxy r -> [PathSegment] -> m (Dynamic t (Maybe (PathParam meth r)))
 pathWidget meth r pthSegs = do
   topathParamWidget (undefined :: (PathPar t (PathParam meth r) (IsTuple (PathParam meth r)))) pthSegs
   
+type IsEmpty = Bool
+
+class CtorInfo (f :: * -> *) where
+  constructorInfo  :: proxy f -> [(Text, IsEmpty)]
+  constructorNames :: proxy f -> [Text]
+  constructorNames _ = [""]
+
+instance CtorInfo f => CtorInfo (D1 c f) where
+  constructorInfo _  = constructorInfo (Proxy :: Proxy f)
+  constructorNames _ = constructorNames (Proxy :: Proxy f)
+
+instance (CtorInfo x, CtorInfo y) => CtorInfo (x :+: y) where
+  constructorInfo _ = constructorInfo (Proxy :: Proxy x) ++ constructorInfo (Proxy :: Proxy y)
+  constructorNames _ = constructorNames (Proxy :: Proxy x) ++ constructorNames (Proxy :: Proxy y)
+
+instance (Constructor c, CtorInfo f) => CtorInfo (C1 c f) where
+  constructorInfo _ = [(T.pack $ conName (undefined :: t c f a), isEmpty)]
+   where [(_, isEmpty)] = constructorInfo (Proxy :: Proxy f)
+  constructorNames _ = [T.pack $ conName (undefined :: t c f a)]
+
+instance (Selector s, CtorInfo f) => CtorInfo (S1 s f) where
+  constructorInfo _ = [("", False)]
+
+instance CtorInfo (K1 i c) where
+  constructorInfo _ = [("", False)]
+
+instance CtorInfo (f :*: g) where
+  constructorInfo _ = [("", False)]
+
+instance CtorInfo U1 where
+  constructorInfo _ = [("", True)]
+
+type DynamicAttr t = Dynamic t (Map String String)
+
+data GToWidgetState t = GToWidgetState
+  { st_constructors :: M.Map Text ((Event t Text), DynamicAttr t)
+  }
+
+data GToWidgetOpts t f a = GToWidgetOpts
+  { state :: Maybe (GToWidgetState t)
+  , arbitraryDef :: Maybe (Dynamic t (f a))
+  }
+
 class GToWidget f where
   gToWidget :: ( MonadWidget t m
-              ) => Proxy (f a) -> m (Dynamic t (f a))
+              ) => GToWidgetOpts t f a -> m (Dynamic t (Maybe (f a)))
 
-instance (GToWidget f) => GToWidget (D1 c f) where
-  gToWidget _ = mapDyn M1 =<< (gToWidget Proxy)
+instance (GToWidget f, CtorInfo f) => GToWidget (D1 c f) where
+  gToWidget (GToWidgetOpts _ def) = do
+    let ctorInfo = constructorInfo (Proxy :: Proxy f)
+    gopts' <- case def of
+      Just dynM1 -> ((GToWidgetOpts Nothing) . Just) <$> mapDyn (\(M1 a) -> a) dynM1
+      _           -> return $ GToWidgetOpts Nothing Nothing
+    case ctorInfo of
+      (_:_:_) -> do  -- SumType
+        sumTyInfo <- forM ctorInfo (\(txt, b) -> do
+          evt <- button (T.unpack txt)
+          return (txt, fmap (const txt) evt)
+          )
+        attrList <- mkSwitchableAttrs (map snd sumTyInfo) []
+        let sumTyInfoMap = M.fromList (zipWith (\(a, b) c -> (a, (b, c))) sumTyInfo attrList)
+        mapDyn (fmap M1) =<< gToWidget gopts' { state = Just $ GToWidgetState sumTyInfoMap }
+      _ -> mapDyn (fmap M1) =<< gToWidget gopts'
 
-instance (GToWidget f, GToWidget g) => GToWidget (f :+: g) where
-  gToWidget _ = mapDyn L1 =<< (gToWidget Proxy)
+instance (GToWidget f, GToWidget g, CtorInfo f, GToWidget (g :+: h)) => GToWidget (f :+: g :+: h) where
+  gToWidget gopts@(GToWidgetOpts gstate def) = do
+    let evtMap = 
+          case gstate of
+            Just (GToWidgetState em) -> em
+            _                        -> M.empty
+        lConName         = head $ constructorNames (Proxy :: Proxy f)
+        (lEvt, lDynAttr) = fromMaybe (error "PANIC!: Constructor lookup failed @ GToWidget (f :+: g)") (M.lookup lConName evtMap)
+    lDyn <- mapDyn (fmap L1) =<< do
+      elDynAttr "div" lDynAttr $ do
+        gToWidget (GToWidgetOpts (Just $ GToWidgetState (M.delete lConName evtMap)) Nothing)
+    rDyn <- mapDyn (fmap R1) =<< gToWidget (GToWidgetOpts (Just $ GToWidgetState (M.delete lConName evtMap)) Nothing)
+
+    fmap joinDyn $ foldDyn (\a _ -> if a == lConName then lDyn else rDyn) lDyn (leftmost $ map (fst .snd) (M.toList evtMap))
+
+instance (GToWidget f, GToWidget g, CtorInfo f, Constructor c) => GToWidget (f :+: C1 c g) where
+  gToWidget gopts@(GToWidgetOpts gstate def) = do
+    let evtMap = 
+          case gstate of
+            Just (GToWidgetState em) -> em
+            _                        -> M.empty
+        lConName         = head $ constructorNames (Proxy :: Proxy f)
+        (lEvt, lDynAttr) = fromMaybe (error "PANIC!: Constructor lookup failed @ GToWidget (f :+: C1 c f)") (M.lookup lConName evtMap)
+        rConName         = T.pack $ conName (undefined :: t c g a)
+        (rEvt, rDynAttr) = fromMaybe (error "PANIC!: Constructor lookup failed @ GToWidget (f :+: C1 c f)") (M.lookup rConName evtMap)
+    lDyn <- mapDyn (fmap L1) =<< do
+      elDynAttr "div" lDynAttr $ do
+        gToWidget (GToWidgetOpts (Just $ GToWidgetState (M.delete lConName evtMap)) Nothing)
+    rDyn <- mapDyn (fmap R1) =<< do
+      elDynAttr "div" rDynAttr $ do
+        gToWidget (GToWidgetOpts Nothing Nothing)
+
+    fmap joinDyn $ foldDyn (\a _ -> if a == lConName then lDyn else rDyn) lDyn (leftmost $ map (fst .snd) (M.toList evtMap))
 
 instance (GToWidget a, GToWidget b) => GToWidget (a :*: b) where
-  gToWidget _ = do
-    adyn <- gToWidget Proxy
-    bdyn <- gToWidget Proxy
-    combineDyn (:*:) adyn bdyn
+  gToWidget gopts = do
+    let gopts' = GToWidgetOpts Nothing Nothing
+    adyn <- gToWidget gopts'
+    bdyn <- gToWidget gopts'
+    combineDyn (\a b -> (:*:) <$> a <*> b) adyn bdyn
 
 instance (GToWidget f, Constructor c) => GToWidget (C1 c f) where
-  gToWidget _ = do
-    elClass "div" "constructor" $ do
-      text $ conName (undefined :: C1 c f ())
-      mapDyn M1 =<< (gToWidget Proxy)
+  gToWidget gopts = do
+    let gopts' = GToWidgetOpts Nothing Nothing
+    elClass "fieldset" "nested-field field" $ do
+      el "legend" $ text $ conName (undefined :: C1 c f ())
+      divClass "field" $ mapDyn (fmap M1) =<< (gToWidget gopts')
   
 instance GToWidget U1 where
+  gToWidget _ = return $ constDyn (Just U1)
 
 instance GToWidget V1 where
+  gToWidget _ = return $ constDyn (error "PANIC!: Unreachable code")
 
 instance (GToWidget f, Selector s) => GToWidget (S1 s f) where
-  gToWidget _ = do
+  gToWidget gopts = do
+    let gopts' = GToWidgetOpts Nothing Nothing
     elClass "div" "field" $ do
-      text $ selName (undefined :: S1 s f ())
-      inp <- gToWidget Proxy
-      mapDyn M1 inp
+      elAttr "label" ("class" =: "label") $ text $ selName (undefined :: S1 s f ())
+      inp <- gToWidget gopts'
+      mapDyn (fmap M1) inp
 
 instance (ToWidget f) => GToWidget (K1 c f) where
-  gToWidget _ = mapDyn K1 =<< toWidget Proxy
+  gToWidget _ = mapDyn (fmap K1) =<< toWidget Proxy
 
 class ToWidget a where
-  toWidget :: MonadWidget t m => Proxy a -> m (Dynamic t a)
-  default toWidget :: (MonadWidget t m, Generic a, GToWidget (Rep a)) => Proxy a -> m (Dynamic t a)
-  toWidget _ = mapDyn to =<< gToWidget (Proxy :: Proxy (Rep a a))
+  toWidget :: MonadWidget t m => Proxy a -> m (Dynamic t (Maybe a))
+  default toWidget :: (MonadWidget t m, Generic a, GToWidget (Rep a)) => Proxy a -> m (Dynamic t (Maybe a))
+  toWidget _ = mapDyn (fmap to) =<< gToWidget (GToWidgetOpts Nothing Nothing)
 
 instance ToWidget Text where
   toWidget _ = do
     txt <- textInput $ def
-    mapDyn T.pack $ _textInput_value txt
+        & attributes .~ constDyn ("class" =: "text-box")
+    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
     
 instance ToWidget Int where
   toWidget _ = do
-    txt <- textInput $ def & textInputConfig_inputType .~ "number"
-    mapDyn read =<< (holdDyn "0" $ _textInput_input txt)
+    txt <- textInput $ def
+        & textInputConfig_inputType .~ "number"
+        & attributes .~ constDyn ("class" =: "text-box")
+    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
 
 instance ToWidget Bool where
   toWidget _ = do
     chk <- checkbox False def
-    return $ _checkbox_value chk
+    mapDyn Just $ _checkbox_value chk
 
 instance ToWidget () where
-  toWidget _ = constDyn <$> divClass "unit-widget" (return ())
+  toWidget _ = emptyParamWidget
 
 instance ToWidget a => ToWidget (Maybe a) where
   toWidget _ = mapDyn Just =<< toWidget (Proxy :: Proxy a)
 
 class ToPathParamWidget (par :: *) (isTup :: Bool) where
-  topathParamWidget :: MonadWidget t m => PathPar t par isTup -> [PathSegment] -> m (Dynamic t par)
+  topathParamWidget :: MonadWidget t m => PathPar t par isTup -> [PathSegment] -> m (Dynamic t (Maybe par))
 
 instance ToWidget par => ToPathParamWidget par 'False where
   topathParamWidget _ pthSegs = do
@@ -270,7 +402,7 @@ instance (ToWidget t1, ToWidget t2) =>  ToPathParamWidget (t1, t2) 'True where
     case break (==Hole) pthSegs2 of
       (spths3, []) -> forM spths3 $ \spth -> staticPthWid False spth
       (_,pths)     -> error "No. of Holes Invariant violated @ (,) case"
-    combineDyn (,) _1Wid _2Wid
+    combineDyn (\a b -> (,) <$> a <*> b) _1Wid _2Wid
 
 instance ( ToWidget t1
          , ToWidget t2
@@ -290,7 +422,7 @@ instance ( ToWidget t1
     case break (==Hole) pthSegs3 of
       (spths4, []) -> forM spths4 $ \spth -> staticPthWid False spth
       (_,pths)     -> error "No. of Holes Invariant violated @ (,,) case"
-    combineDyn3 (,,)  _1Wid _2Wid _3Wid
+    combineDyn3 (\a b c -> (,,) <$> a <*> b <*> c)  _1Wid _2Wid _3Wid
                   
 combineDyn3 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> m (Dynamic t d)
 combineDyn3 f da db dc = (combineDyn (\c (a, b) -> f a b c) dc) =<< (combineDyn (,) da db)
@@ -307,11 +439,25 @@ combineDyn6 fn da db dc dd de df = (combineDyn (\f (a, b, c, d, e) -> fn a b c d
 combineDyn7 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d -> e -> f -> g -> h) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> (Dynamic t d) -> Dynamic t e -> Dynamic t f -> Dynamic t g -> m (Dynamic t h)
 combineDyn7 fn da db dc dd de df dg = (combineDyn (\g (a, b, c, d, e, f) -> fn a b c d e f g) dg) =<< (combineDyn6 (,,,,,) da db dc dd de df)
                   
-emptyParamWidget ::  MonadWidget t m => m (Dynamic t ())
-emptyParamWidget = return $ constDyn ()
+emptyParamWidget ::  MonadWidget t m => m (Dynamic t (Maybe ()))
+emptyParamWidget = return $ constDyn $ Just ()
 
 staticPthWid :: MonadWidget t m => Bool -> PathSegment -> m ()
 staticPthWid sep (StaticSegment spth) = text $ (T.unpack spth) ++ if sep then "/" else ""
 staticPthWid _ Hole = error "Invariant Violated @staticPthWid! Found Dynamic Hole"
 
-
+mkXhrReq :: Reflex t
+         => Dynamic t Text
+         -> Dynamic t String
+         -> Dynamic t BS.ByteString
+         -> PullM t XhrRequest
+mkXhrReq methD urlD fpD = do
+  meth <- sample . current $ methD
+  url  <- sample . current $ urlD
+  fp   <- sample . current $ fpD
+  let headerUrlEnc = if BS.null fp then M.empty else "Content-type" =: "application/x-www-form-urlencoded"
+      body = T.unpack . decodeUtf8 $ fp
+  return $ XhrRequest (T.unpack meth) url
+            $ def { _xhrRequestConfig_headers = headerUrlEnc
+                  , _xhrRequestConfig_sendData = Just body
+                  }
