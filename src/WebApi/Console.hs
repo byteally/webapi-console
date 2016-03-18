@@ -217,37 +217,26 @@ pathWidget :: forall t m meth r.
 pathWidget meth r pthSegs = do
   topathParamWidget (undefined :: (PathPar t (PathParam meth r) (IsTuple (PathParam meth r)))) pthSegs
   
-type IsEmpty = Bool
-
 class CtorInfo (f :: * -> *) where
-  constructorInfo  :: proxy f -> [(Text, IsEmpty)]
   constructorNames :: proxy f -> [Text]
   constructorNames _ = [""]
 
 instance CtorInfo f => CtorInfo (D1 c f) where
-  constructorInfo _  = constructorInfo (Proxy :: Proxy f)
   constructorNames _ = constructorNames (Proxy :: Proxy f)
 
 instance (CtorInfo x, CtorInfo y) => CtorInfo (x :+: y) where
-  constructorInfo _ = constructorInfo (Proxy :: Proxy x) ++ constructorInfo (Proxy :: Proxy y)
   constructorNames _ = constructorNames (Proxy :: Proxy x) ++ constructorNames (Proxy :: Proxy y)
 
 instance (Constructor c, CtorInfo f) => CtorInfo (C1 c f) where
-  constructorInfo _ = [(T.pack $ conName (undefined :: t c f a), isEmpty)]
-   where [(_, isEmpty)] = constructorInfo (Proxy :: Proxy f)
   constructorNames _ = [T.pack $ conName (undefined :: t c f a)]
 
 instance (Selector s, CtorInfo f) => CtorInfo (S1 s f) where
-  constructorInfo _ = [("", False)]
 
 instance CtorInfo (K1 i c) where
-  constructorInfo _ = [("", False)]
 
 instance CtorInfo (f :*: g) where
-  constructorInfo _ = [("", False)]
 
 instance CtorInfo U1 where
-  constructorInfo _ = [("", True)]
 
 type DynamicAttr t = Dynamic t (Map String String)
 
@@ -266,15 +255,15 @@ class GToWidget f where
 
 instance (GToWidget f, CtorInfo f) => GToWidget (D1 c f) where
   gToWidget (GToWidgetOpts _ def) = do
-    let ctorInfo = constructorInfo (Proxy :: Proxy f)
+    let ctorNames = constructorNames (Proxy :: Proxy f)
     gopts' <- case def of
       Just dynM1 -> ((GToWidgetOpts Nothing) . Just) <$> mapDyn (\(M1 a) -> a) dynM1
       _           -> return $ GToWidgetOpts Nothing Nothing
-    case ctorInfo of
+    case ctorNames of
       (_:_:_) -> do  -- SumType
-        sumTyInfo <- forM ctorInfo (\(txt, b) -> do
-          evt <- button (T.unpack txt)
-          return (txt, fmap (const txt) evt)
+        sumTyInfo <- forM ctorNames (\cname -> do
+          evt <- button (T.unpack cname)
+          return (cname, fmap (const cname) evt)
           )
         attrList <- mkSwitchableAttrs (map snd sumTyInfo) []
         let sumTyInfoMap = M.fromList (zipWith (\(a, b) c -> (a, (b, c))) sumTyInfo attrList)
@@ -456,7 +445,7 @@ mkXhrReq methD urlD fpD = do
   url  <- sample . current $ urlD
   fp   <- sample . current $ fpD
   let headerUrlEnc = if BS.null fp then M.empty else "Content-type" =: "application/x-www-form-urlencoded"
-      body = T.unpack . decodeUtf8 $ fp
+      body = ASCII.unpack fp
   return $ XhrRequest (T.unpack meth) url
             $ def { _xhrRequestConfig_headers = headerUrlEnc
                   , _xhrRequestConfig_sendData = Just body

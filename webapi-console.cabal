@@ -17,7 +17,6 @@ build-type:          Simple
 cabal-version:       >=1.10
 data-files:          css/main.css
                    , js/script.js
-                   , js/zepto.js
 data-dir:            static
 
 library
