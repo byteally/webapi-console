@@ -30,6 +30,7 @@ import WebApi.PageTemplate
 import Data.Map (Map)
 import Debug.Trace
 import Reflex.Utils
+import Data.Monoid ((<>))
 
 foreign import javascript unsafe "console.log($1)" js_log :: JSString -> IO ()
 
@@ -97,13 +98,13 @@ apiConsole :: forall api apis routes.
              ) => ConsoleConfig -> Proxy api -> IO ()
 apiConsole config api = do
   let routes = singRoutes api (Proxy :: Proxy apis)
-      getPathSegs :: forall t m rs.MonadWidget t m => SingRoute api rs -> [(Method, Text, m (Event t ()))]
+      getPathSegs :: forall t m rs.MonadWidget t m => SingRoute api rs -> [(Method, Text, (Event t () -> m (Event t ())))]
       getPathSegs (RouteCons pxyM pxyR rs)
         = let routeTpl = T.intercalate "/" $ mkRouteTplStr pathSegs (getDynTyRep $ getPathParPxy pxyM pxyR)
               pathSegs = mkPathFormatString pxyR
           in ( singMethod pxyM
              , routeTpl
-             , paramWidget api pxyM pxyR (baseURI config) pathSegs
+             , paramWidget api pxyM pxyR (baseURI config) (error $ "apiconsole:" ++ show pathSegs)
              ) : (getPathSegs rs)
       getPathSegs RouteNil           = []
       routeSegs = getPathSegs routes
@@ -114,7 +115,7 @@ apiConsole config api = do
         el "h1" $ text "Api Console"
         divClass "apiconsole" $ do
             dropdownTabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $  
-              \(m, r, paramWid) -> ((show (m, r)), ((show (m, r)), void paramWid))
+              \(m, r, paramWid) -> ((show (m, r)), ((show (m, r)), (void . paramWid)))
     return ()
 
 getDynTyRep :: Typeable a => Proxy a -> [Text]
@@ -139,8 +140,9 @@ paramWidget ::  forall t m meth r api.
                , ToWidget (CookieIn meth r)
                , ToPathParamWidget (PathParam meth r) (IsTuple (PathParam meth r))
                , ConsoleCtx api meth r
-               ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> m (Event t ())
-paramWidget api meth r baseUrl pathSegs = divClass "" $ do
+               ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> Event t () -> m (Event t ())
+paramWidget api meth r baseUrl pathSegs onSubmit = divClass "" $ do
+  error $ "paramWidget: " ++ show pathSegs
   onReq <- divClass "request-form" $ do
     let methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)        
     rec 
@@ -177,9 +179,7 @@ paramWidget api meth r baseUrl pathSegs = divClass "" $ do
         linkDyn <- mapDyn ((fromMaybe "") . (fmap (\req -> show $ WebApi.link (undefined :: meth, undefined :: r) baseUrl (pathParam req) (Just $ queryParam req)))) requestDyn
         return (linkDyn, encodedFormParDyn)
       -- display encodedFormParDyn
-    divClass "submit-button" $ do
-      fire <- button "Fire"
-      return $ tag (pull $ mkXhrReq methDyn urlDyn encodedFormParDyn) fire
+    return $ tag (pull $ mkXhrReq methDyn urlDyn encodedFormParDyn) onSubmit
   divClass "response" $ do
     text "Response"
     res <- performRequestAsync onReq
@@ -219,7 +219,7 @@ pathWidget meth r pthSegs = do
   
 class CtorInfo (f :: * -> *) where
   constructorNames :: proxy f -> [Text]
-  constructorNames _ = [""]
+  constructorNames _ = []
 
 instance CtorInfo f => CtorInfo (D1 c f) where
   constructorNames _ = constructorNames (Proxy :: Proxy f)
@@ -361,8 +361,48 @@ instance ToWidget Bool where
 instance ToWidget () where
   toWidget _ = emptyParamWidget
 
+instance ToWidget a => ToWidget [a] where
+  toWidget _ = do
+    rec addEvt <- button "+"
+        dynValMap <- listWithKeyShallowDiff (M.empty :: M.Map Int ()) (leftmost evtList) createWidget
+        let setNothingAt i = do
+              valMap <- sample. current $ dynValMap
+              return $ Just $ M.mapWithKey (\k a -> if k == i then Nothing else Just ()) valMap
+            addElement = do
+              valMap <- sample. current $ dynValMap
+              lastKey <- sample . current $ lastKeyD
+              return $ M.insert (lastKey + 1) (Just ()) $ M.map (const (Just ())) valMap
+        dynListWithKeys <- mapDyn M.toList dynValMap
+        dynValMap' <- mapDyn (M.map fst) dynValMap
+        let getLastKey (x :: [Int]) = if null x then (-1) else maximum x
+        lastKeyD <- mapDyn (getLastKey . map fst) dynListWithKeys
+        (_, evtsD) <- splitDyn =<< mapDyn (unzip . map snd) dynListWithKeys
+        let modelD = joinDynThroughMap dynValMap'
+        evts <- mapDyn leftmost evtsD -- Remove events
+        let evtList = (tag (pull addElement) addEvt) : [(push setNothingAt $ switchPromptlyDyn evts)]
+    mapDyn (sequence . (map snd) . M.toList) modelD
+    where
+      fn :: MonadSample t m => [Dynamic t (Maybe a)] -> m (Maybe [a])
+      fn = (\model -> do
+        model' <- mapM (sample . current) model
+        return $ sequence model'
+        )
+      createWidget k _ _ = initNew k
+      initNew :: (MonadWidget t m , ToWidget a) => Int -> m (Dynamic t (Maybe a), Event t Int)
+      initNew i = do
+        putDebugLn $ show i
+        mDyn   <- toWidget (Proxy :: Proxy a)
+        onRemove <- button "x"
+        mDyn' <- mapDyn (maybe [] (: [])) mDyn
+        return (mDyn, tag (constant i) onRemove)
+
 instance ToWidget a => ToWidget (Maybe a) where
-  toWidget _ = mapDyn Just =<< toWidget (Proxy :: Proxy a)
+  toWidget _ = do
+    widget <- toWidget (Proxy :: Proxy a)
+    (e, _) <- el' "button" $
+      text "Toggle"
+    isActive <- toggle True (_el_clicked e)
+    combineDyn (\a b -> fmap (\x -> if a then Just x else Nothing) b) isActive widget
 
 class ToPathParamWidget (par :: *) (isTup :: Bool) where
   topathParamWidget :: MonadWidget t m => PathPar t par isTup -> [PathSegment] -> m (Dynamic t (Maybe par))

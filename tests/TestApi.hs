@@ -30,7 +30,7 @@ data UserQuery = UserQuery
 
 data User = User
   { userId :: Int
-  , userName :: Text
+  , userName :: [Text]
   , userAge :: Int
   , userType :: UserType
   } deriving (Show, Eq, Generic, ToJSON, FromJSON)
