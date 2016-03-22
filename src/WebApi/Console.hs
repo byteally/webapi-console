@@ -104,7 +104,7 @@ apiConsole config api = do
               pathSegs = mkPathFormatString pxyR
           in ( singMethod pxyM
              , routeTpl
-             , paramWidget api pxyM pxyR (baseURI config) (error $ "apiconsole:" ++ show pathSegs)
+             , (\x -> paramWidget api pxyM pxyR (baseURI config) pathSegs x)
              ) : (getPathSegs rs)
       getPathSegs RouteNil           = []
       routeSegs = getPathSegs routes
@@ -142,29 +142,28 @@ paramWidget ::  forall t m meth r api.
                , ConsoleCtx api meth r
                ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> Event t () -> m (Event t ())
 paramWidget api meth r baseUrl pathSegs onSubmit = divClass "" $ do
-  error $ "paramWidget: " ++ show pathSegs
   onReq <- divClass "request-form" $ do
     let methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)        
     rec 
       divClass "request-url" $ dynText urlDyn
       (urlDyn, encodedFormParDyn) <- divClass "params" $ do
-        queryWidget <- el "div" $ do
-          divClass "param-type" $ text "Query Params"
+        queryWidget <- divClass "param-type-wrapper query" $ do
+          --divClass "param-type query" $ return ()
           toWidget (Proxy :: Proxy (QueryParam meth r))
-        formWidget <- el "div" $ do
-          divClass "param-type" $ text "Form Params"
+        formWidget <- divClass "param-type-wrapper form" $ do
+          --divClass "param-type" $ text "Form Params"
           toWidget (Proxy :: Proxy (FormParam meth r))
-        pthWidget <- el "div" $ do
-          divClass "param-type" $ text "Path Params"
+        pthWidget <- divClass "param-type-wrapper path" $ do
+          --divClass "param-type" $ text "Path Params"
           pathWidget meth r pathSegs
-        headWidget <- el "div" $ do
-          divClass "param-type" $ text "Headers"
+        headWidget <- divClass "param-type-wrapper headers" $ do
+          --divClass "param-type" $ text "Headers"
           toWidget (Proxy :: Proxy (HeaderIn meth r))
-        fileWidget <- el "div" $ do
-          divClass "param-type" $ text "Files"
+        fileWidget <- divClass "param-type-wrapper files" $ do
+          --divClass "param-type" $ text "Files"
           toWidget (Proxy :: Proxy (FileParam meth r))
-        cookWidget <- el "div" $ do
-          divClass "param-type" $ text "Cookies"
+        cookWidget <- divClass "param-type-wrapper cookies" $ do
+          --divClass "param-type" $ text "Cookies"
           toWidget (Proxy :: Proxy (CookieIn meth r))
         (requestDyn :: Dynamic t (Maybe (Request meth r))) <- combineDyn7 mkReq
                                                                 pthWidget
