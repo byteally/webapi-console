@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, KindSignatures, DataKinds, TypeOperators, TypeFamilies, GADTs, ScopedTypeVariables, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances, OverloadedLists, DefaultSignatures, StandaloneDeriving #-}
+{-# LANGUAGE OverloadedStrings, KindSignatures, DataKinds, TypeOperators, TypeFamilies, GADTs, ScopedTypeVariables, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances, OverloadedLists, DefaultSignatures, StandaloneDeriving, StaticPointers #-}
 {-# LANGUAGE RecursiveDo #-}
 -- | 
 
@@ -9,28 +9,44 @@ import qualified Data.Map as M
 import Data.Maybe
 import GHCJS.Types
 import Reflex.Dom as RD
+import Data.Either
 import Data.Proxy
-import Data.Aeson as A
+import Data.Aeson as A hiding (Success)
 import Data.Typeable
 import WebApi
 import GHC.Exts
 import Network.URI
+import Data.List
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as ASCII
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import qualified Data.Map.Lazy as LM
+import           Network.HTTP.Media                    (mapContentMedia)
 import Network.HTTP.Types
 import Network.HTTP.Types.URI
 import Network.URI
 import Control.Monad
+import Control.Monad.IO.Class
 import GHC.Generics
+import WebApi.Client
+import WebApi.Internal (getContentType) 
 import WebApi.PageTemplate
+--import WebApi.Assertion hiding (ToWidget)
 import Data.Map (Map)
 import Debug.Trace
 import Reflex.Utils
+import qualified Data.Map as M
 import Data.Monoid ((<>))
+import Data.Functor.Contravariant
+import Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Strict as HM
+import qualified Data.Rank1Dynamic as R1D (Dynamic)
+import Data.Rank1Dynamic hiding (Dynamic)
+import Data.Rank1Typeable hiding (V1)
+import Control.Exception
 
 foreign import javascript unsafe "console.log($1)" js_log :: JSString -> IO ()
 
@@ -52,6 +68,12 @@ type family ConsoleCtx api m r :: Constraint where
                        , FromHeader (HeaderOut m r)
                        , Decodings (ContentTypes m r) (ApiOut m r)
                        , Decodings (ContentTypes m r) (ApiErr m r)
+                       , Generic (ApiOut m r)
+                       , GAssert (Rep (ApiOut m r))
+                       , Generic (ApiErr m r)
+                       , GAssert (Rep (ApiErr m r))
+                       , HeaderOut m r ~ ()
+                       , CookieOut m r ~ ()
                        , ParamErrToApiErr (ApiErr m r)
                        , SingMethod m
                        )
@@ -88,7 +110,7 @@ instance SingRoutes api '[] where
 data ConsoleConfig = ConsoleConfig
   { baseURI :: URI
   } deriving (Show, Eq)
-    
+
 apiConsole :: forall api apis routes.
              ( WebApi api
              , apis ~ Apis api
@@ -139,6 +161,14 @@ paramWidget ::  forall t m meth r api.
                , ToWidget (HeaderIn meth r)
                , ToWidget (CookieIn meth r)
                , ToPathParamWidget (PathParam meth r) (IsTuple (PathParam meth r))
+               , Decodings (ContentTypes meth r) (ApiOut meth r)
+               , Decodings (ContentTypes meth r) (ApiErr meth r)
+               , Generic (ApiOut meth r)
+               , GAssert (Rep (ApiOut meth r))
+               , Generic (ApiErr meth r)
+               , GAssert (Rep (ApiErr meth r))
+               , HeaderOut meth r ~ ()
+               , CookieOut meth r ~ ()
                , ConsoleCtx api meth r
                ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> Event t () -> m (Event t ())
 paramWidget api meth r baseUrl pathSegs onSubmit = divClass "" $ do
@@ -179,17 +209,60 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "" $ do
         return (linkDyn, encodedFormParDyn)
       -- display encodedFormParDyn
     return $ tag (pull $ mkXhrReq methDyn urlDyn encodedFormParDyn) onSubmit
+  resE <- performRequestAsyncWithError onReq
+  let res = fmap (\r -> case r of
+                     Left ex -> Left ex
+                     Right r' -> case _xhrResponse_responseText r' of
+                       Just txt -> Right (Status (fromIntegral $ _xhrResponse_status r') (encodeUtf8 $ _xhrResponse_statusText r'), txt)
+                       Nothing  -> Left (error "EMPTY BODY")
+                 ) resE
+      mkResponse' (Right (st, respTxt)) = mkResponse st (encodeUtf8 respTxt)
+      mkResponse' (Left ex)             = Failure $ Right (OtherError $ toException ex)
+      response :: Event t (Response meth r)
+      response = mkResponse' <$> res
   divClass "response" $ do
     text "Response"
-    res <- performRequestAsync onReq
-    status <- holdDyn "" (fmap (show . _xhrResponse_status) res)
-    divClass "" $ do
-      text "status: "
-      dynText status
-    (responseText :: Dynamic t (Maybe Text)) <- holdDyn Nothing (fmap (_xhrResponse_responseText) res)
     divClass "" $ do
       text "response: "
-      display responseText
+    divClass "assert" $ do
+      text "Assertion"
+      statusAssert <- divClass "status-assert" $ do
+        divClass "div field" $ do
+          elAttr "label" ("class" =: "label") $ text "Status Code"
+          text " == "
+          exp <- toWidget (Proxy :: Proxy Int)
+          return ()
+        divClass "div field" $ do
+          elAttr "label" ("class" =: "label") $ text "Status Message"
+          text " == "
+          exp <- toWidget (Proxy :: Proxy Text)
+          return ()
+      (apiOutAssert :: Dynamic t (Predicate (ApiOut meth r))) <- divClass "api-out-assert" $ do
+        text "api-out"
+        mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiOut meth r) ()))
+      (apiErrAssert :: Dynamic t (Predicate (ApiErr meth r))) <- divClass "api-err-assert" $ do
+        text "api-err"
+        mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiErr meth r) ()))
+      (headerOutAssert :: Dynamic t (Predicate (HeaderOut meth r))) <- divClass "header-out-assert" $ do
+        text "hd-out"
+        mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (HeaderOut meth r) ()))
+      (cookieOutAssert :: Dynamic t (Predicate (CookieOut meth r))) <- divClass "cookie-out-assert" $ do
+        text "cook-out"
+        mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (CookieOut meth r) ()))
+      let combDyn (outPred, errPred, hdrPred, cookPred) (Success st out hdr cook) =
+            let outRes   = (getPredicate outPred) out
+                hdrRes   = (getPredicate hdrPred) hdr
+                cookRes  = (getPredicate cookPred) cook
+            in outRes -- && hdrRes && cookRes
+          combDyn (outPred, errPred, hdrPred, cookPred) (Failure (Left (ApiError st err hdr cook))) =
+            let errRes   = (getPredicate errPred) err
+                hdrRes   = maybe True (getPredicate hdrPred) hdr
+                cookRes  = maybe True (getPredicate cookPred) cook
+            in errRes && hdrRes && cookRes
+          combDyn _ (Failure (Right _ex)) = False
+      preds <- combineDyn4 (,,,) apiOutAssert apiErrAssert headerOutAssert cookieOutAssert
+      display =<< holdDyn True (attachDynWith combDyn preds response)
+      return ()
   return $ tag (constant ()) onReq
   where
     mkReq pw qw fw fiw hw cw md = Req <$> pw 
@@ -200,6 +273,45 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "" $ do
                                       <*> cw
                                       <*> pure md
 
+-- TODO: Dup from WebApi package
+mkResponse :: forall m r.( Decodings (ContentTypes m r) (ApiOut m r)
+                   , Decodings (ContentTypes m r) (ApiErr m r)
+                   , ParamErrToApiErr (ApiErr m r)
+                   , CookieOut m r ~ ()
+                   , HeaderOut m r ~ ()
+                   ) => Status -> ByteString -> Response m r
+mkResponse status respBodyBS =
+  case statusIsSuccessful status of
+    True  -> case Success <$> pure status
+                         <*> (Validation $ toParamErr $ decodeResponse (undefined :: (m, r)) respBodyBS)
+                         <*> pure ()
+                         <*> pure () of
+      Validation (Right success) -> success
+      Validation (Left errs) -> Failure $ Left $ ApiError status (toApiErr errs) Nothing Nothing
+    False -> case ApiError
+                  <$> pure status
+                  <*> (Validation $ toParamErr $ decodeResponse (undefined :: (m, r)) respBodyBS)
+                  <*> (Just <$> pure ())
+                  -- TODO: Handle cookies
+                  <*> pure Nothing of
+               Validation (Right failure) -> (Failure . Left) failure
+               Validation (Left _errs) -> Failure $ Right (OtherError (error "unknown exception"))
+  where toParamErr :: Either String a -> Either [ParamErr] a
+        toParamErr (Left _str) = Left []
+        toParamErr (Right r)  = Right r
+               
+decodeResponse :: ( Decodings (ContentTypes m r) a
+          ) => apiRes m r -> ByteString -> Either String a
+decodeResponse r o = case (Just "application/json") of -- TODO: Needs Response header from reflex
+  Just ctype -> let decs = decodings (reproxy r) o
+               in maybe (firstRight (map snd decs)) id (mapContentMedia decs ctype)
+  Nothing    -> firstRight (map snd (decodings (reproxy r) o))
+  where  
+    reproxy :: apiRes m r -> Proxy (ContentTypes m r)
+    reproxy = const Proxy
+    firstRight :: [Either String b] -> Either String b
+    firstRight = maybe (Left "Couldn't find matching Content-Type") id . find isRight
+      
 newtype PathPar t a (isTup :: Bool) = PathPar
   { getPathPar :: ([PathSegment] -> (Dynamic t a)) }
 
@@ -451,7 +563,108 @@ instance ( ToWidget t1
       (spths4, []) -> forM spths4 $ \spth -> staticPthWid False spth
       (_,pths)     -> error "No. of Holes Invariant violated @ (,,) case"
     combineDyn3 (\a b c -> (,,) <$> a <*> b <*> c)  _1Wid _2Wid _3Wid
-                  
+  
+class GAssert f where
+  gAssert :: (MonadWidget t m) => Proxy (f a) -> m (Dynamic t (Predicate (f a)))
+
+instance GAssert f => GAssert (D1 c f) where
+  gAssert _ = do
+    mapDyn (contramap unM1) =<< gAssert Proxy
+
+instance GAssert (f :+: g) where
+  gAssert _ = do
+    text "<<TODO: SUM TYPE>>" 
+    return $ constDyn $ Predicate (\_ -> True)
+instance (GAssert a, GAssert b) => GAssert (a :*: b) where
+  gAssert _ = do
+    assertA <- gAssert Proxy
+    assertB <- gAssert Proxy
+    let fstPrd (f :*: s) = f
+        sndPrd (f :*: s) = s
+    aDyn <- mapDyn (contramap fstPrd) assertA
+    bDyn <- mapDyn (contramap sndPrd) assertB
+    combineDyn (\a b -> Predicate $ \prd -> ((getPredicate a) prd) && ((getPredicate b) prd)) aDyn bDyn
+instance GAssert U1 where
+  gAssert _ = return $ constDyn $ Predicate (\_ -> True)
+
+instance (GAssert f) => GAssert (C1 c f) where
+  gAssert _ = do
+    mapDyn (contramap unM1) =<< gAssert Proxy
+
+instance (GAssert f, Selector s) => GAssert (S1 s f) where
+  gAssert _ = do
+    divClass "div field" $ do
+      elAttr "label" ("class" =: "label") $ text $ selName (undefined :: S1 s f ())
+      mapDyn (contramap unM1) =<< gAssert Proxy
+    
+instance (ToWidget f, Typeable f) => GAssert (K1 c f) where
+  gAssert _ = do
+    dropdown ("project" :: Text) (constDyn M.empty) def
+    txt <- textInput $ def
+    let lookupPredFn fnKey = maybe (error "Unknown Fn1") prjFnDyn $ HM.lookup fnKey funTable
+    let succeed _ _ = True
+    fnDyn <- holdDyn (toDynamic (succeed :: ANY -> ANY -> Bool)) ((lookupPredFn . T.pack) <$>_textInput_input txt)
+--    fnDyn <- mapDyn (lookupPredFn . T.pack) $ _textInput_value txt
+    valDyn <- toWidget Proxy
+    res <- combineDyn (\fn val -> mkPred fn val) fnDyn valDyn
+    mapDyn (contramap unK1) res
+      where mkPred :: R1D.Dynamic -> Maybe f -> Predicate f
+            mkPred fn Nothing  = Predicate $ const True
+            mkPred fn (Just w) = Predicate $ \v -> unsafeRight $ do
+              pred <- fn `dynApply` (toDynamic v)
+              res  <- pred `dynApply` (toDynamic w)
+              fromDynamic res
+            unsafeRight (Right a) = a
+            unsafeRight _         = error "Expecting only right"
+{-    mapDyn ((contramap unK1) . mkPred) =<< toWidget Proxy
+      where mkPred Nothing  = Predicate $ const False
+            mkPred (Just p) = p
+
+instance (ToWidget a, Eq a) => ToWidget (Predicate a) where
+  toWidget _ = do
+    mapDyn mkPred =<< toWidget (Proxy :: Proxy a)
+      where mkPred Nothing  = Nothing
+            mkPred (Just w) = Just $ Predicate $ \v -> v == w
+-}
+
+data WidgetBox = forall a.(ToWidget a) => WidgetBox (Proxy a)
+
+instance Show WidgetBox where
+  show wb = "<<WidgetBox>>"
+
+data PrjFnInfo = PrjFnInfo
+  { prjFnDyn :: R1D.Dynamic
+  , prjResWidget :: WidgetBox
+  , prjFnModName :: String
+  , prjFnPkgKey  :: String
+  } deriving (Show)
+
+type PrjMap = HashMap Text PrjFnInfo
+
+data PrjVal = forall v.(Typeable v, ToWidget v) => Val v
+            | ProjectedVal (R1D.Dynamic, PrjFnInfo) PrjVal
+
+funTable :: PrjMap
+funTable = HM.fromList
+  [ ("Data.List.length", PrjFnInfo (toDynamic (length :: [ANY] -> Int)) (WidgetBox (Proxy :: Proxy Int)) "Data.List" "base")
+  , ("==", PrjFnInfo (toDynamic ((==) :: Int -> Int -> Bool)) (WidgetBox (Proxy :: Proxy Bool)) "GHC.Classes" "base")
+  ]
+
+apply :: Text -> PrjVal -> Either String PrjVal
+apply fnKey val@(Val v) = do
+  prjFnInf <- maybe (Left "Unknown Fn") Right $ HM.lookup fnKey funTable
+  prjRes <- (prjFnDyn prjFnInf) `dynApply` (toDynamic v)
+  return $ ProjectedVal (prjRes, prjFnInf) val
+apply fnKey pVal@(ProjectedVal pRes _) = do
+  prjFnInf <- maybe (Left "Unknown Fn") Right $ HM.lookup fnKey funTable
+  prjRes <- (prjFnDyn prjFnInf) `dynApply` (fst pRes)
+  return $ ProjectedVal (prjRes, prjFnInf) pVal
+
+unapply :: PrjVal -> PrjVal
+unapply v@(Val _) = v
+unapply (ProjectedVal _ nextVal) = nextVal
+
+  
 combineDyn3 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> m (Dynamic t d)
 combineDyn3 f da db dc = (combineDyn (\c (a, b) -> f a b c) dc) =<< (combineDyn (,) da db)
 

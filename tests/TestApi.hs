@@ -45,7 +45,7 @@ instance ToParam User 'QueryParam
   
 instance ApiContract TestApp GET UserR where
   type QueryParam GET UserR = UserQuery
-  type ApiOut GET UserR = [User]
+  type ApiOut GET UserR = User
 
 instance ApiContract TestApp GET ProfileR where
   type QueryParam GET ProfileR = User

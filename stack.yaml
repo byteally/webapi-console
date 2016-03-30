@@ -53,6 +53,7 @@ extra-deps:
 - th-expand-syns-0.3.0.6
 - freer-0.2.2.4
 # - webapi-0.2.0.0
+- rank1dynamic-0.3.2.0
 
 # WEBAPI
 - QuickCheck-2.8.2
