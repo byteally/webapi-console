@@ -1,12 +1,13 @@
 {-# LANGUAGE OverloadedStrings, KindSignatures, DataKinds, TypeOperators, TypeFamilies, GADTs, ScopedTypeVariables, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances, OverloadedLists, DefaultSignatures, StandaloneDeriving, StaticPointers #-}
 {-# LANGUAGE RecursiveDo #-}
--- | 
+-- |
 
 module WebApi.Console where
 
 import Data.JSString ()
 import qualified Data.Map as M
 import Data.Maybe
+import Data.Tree
 import GHCJS.Types
 import Reflex.Dom as RD
 import Data.Either
@@ -32,7 +33,7 @@ import Control.Monad
 import Control.Monad.IO.Class
 import GHC.Generics
 import WebApi.Client
-import WebApi.Internal (getContentType) 
+import WebApi.Internal (getContentType)
 import WebApi.PageTemplate
 --import WebApi.Assertion hiding (ToWidget)
 import Data.Map (Map)
@@ -69,9 +70,12 @@ type family ConsoleCtx api m r :: Constraint where
                        , Decodings (ContentTypes m r) (ApiOut m r)
                        , Decodings (ContentTypes m r) (ApiErr m r)
                        , Generic (ApiOut m r)
-                       , GAssert (Rep (ApiOut m r))
+                       --, GAssert (Rep (ApiOut m r))
+                       , SelectorName (ApiOut m r)
+                       , Assert (ApiOut m r)
                        , Generic (ApiErr m r)
-                       , GAssert (Rep (ApiErr m r))
+                       --, GAssert (Rep (ApiErr m r))
+                       , Assert (ApiErr m r)
                        , HeaderOut m r ~ ()
                        , CookieOut m r ~ ()
                        , ParamErrToApiErr (ApiErr m r)
@@ -86,13 +90,13 @@ type family FlattenRoutes (xs :: [*]) :: [(*,*)] where
   FlattenRoutes (Route (m ': ms) r ': rs) = '(m, r) ': FlattenRoutes (Route ms r ': rs)
   FlattenRoutes (Route '[] r ': rs)       =  FlattenRoutes rs
   FlattenRoutes '[]                       = '[]
-  
+
 data SingRoute api (rs :: [(*,*)]) where
   RouteCons :: ConsoleCtx api m r => Proxy m -> Proxy r -> SingRoute api rs -> SingRoute api ('(m, r) ': rs)
   RouteNil  :: SingRoute api rs
 
 data RouteBox api = forall m r.ConsoleCtx api m r => RouteBox (Proxy m) (Proxy r)
-  
+
 class SingRoutes api (apis :: [*]) where
   singRoutes :: Proxy api -> Proxy apis -> SingRoute api (FlattenRoutes apis)
 
@@ -134,10 +138,12 @@ apiConsole config api = do
       getPathParPxy _ _ = Proxy
   mainWidgetWithHead pageTemplate $ do
     el "main" $ do
-        el "h1" $ text "Api Console"
-        divClass "apiconsole" $ do
-            dropdownTabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $  
-              \(m, r, paramWid) -> ((show (m, r)), ((show (m, r)), (void . paramWid)))
+      el "header" $ do
+        el "h1" $ text "WebApi Console"
+        el "small" $ text "v0.1.0"
+      divClass "apiconsole" $ do
+        dropdownTabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $
+          \(m, r, paramWid) -> ((show (m, r)), ((show (m, r)), (void . paramWid)))
     return ()
 
 getDynTyRep :: Typeable a => Proxy a -> [Text]
@@ -164,17 +170,18 @@ paramWidget ::  forall t m meth r api.
                , Decodings (ContentTypes meth r) (ApiOut meth r)
                , Decodings (ContentTypes meth r) (ApiErr meth r)
                , Generic (ApiOut meth r)
-               , GAssert (Rep (ApiOut meth r))
+               , SelectorName (ApiOut meth r)
+               , Assert (ApiOut meth r)
                , Generic (ApiErr meth r)
-               , GAssert (Rep (ApiErr meth r))
+               , Assert (ApiErr meth r)
                , HeaderOut meth r ~ ()
                , CookieOut meth r ~ ()
                , ConsoleCtx api meth r
                ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> Event t () -> m (Event t ())
-paramWidget api meth r baseUrl pathSegs onSubmit = divClass "" $ do
+paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
   onReq <- divClass "request-form" $ do
-    let methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)        
-    rec 
+    let methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)
+    rec
       divClass "request-url" $ dynText urlDyn
       (urlDyn, encodedFormParDyn) <- divClass "params" $ do
         queryWidget <- divClass "param-type-wrapper query" $ do
@@ -220,52 +227,102 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "" $ do
       mkResponse' (Left ex)             = Failure $ Right (OtherError $ toException ex)
       response :: Event t (Response meth r)
       response = mkResponse' <$> res
-  divClass "response" $ do
-    text "Response"
-    divClass "" $ do
-      text "response: "
-    divClass "assert" $ do
-      text "Assertion"
-      statusAssert <- divClass "status-assert" $ do
-        divClass "div field" $ do
-          elAttr "label" ("class" =: "label") $ text "Status Code"
-          text " == "
-          exp <- toWidget (Proxy :: Proxy Int)
-          return ()
-        divClass "div field" $ do
-          elAttr "label" ("class" =: "label") $ text "Status Message"
-          text " == "
-          exp <- toWidget (Proxy :: Proxy Text)
-          return ()
-      (apiOutAssert :: Dynamic t (Predicate (ApiOut meth r))) <- divClass "api-out-assert" $ do
-        text "api-out"
-        mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiOut meth r) ()))
-      (apiErrAssert :: Dynamic t (Predicate (ApiErr meth r))) <- divClass "api-err-assert" $ do
-        text "api-err"
-        mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiErr meth r) ()))
-      (headerOutAssert :: Dynamic t (Predicate (HeaderOut meth r))) <- divClass "header-out-assert" $ do
-        text "hd-out"
-        mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (HeaderOut meth r) ()))
-      (cookieOutAssert :: Dynamic t (Predicate (CookieOut meth r))) <- divClass "cookie-out-assert" $ do
-        text "cook-out"
-        mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (CookieOut meth r) ()))
-      let combDyn (outPred, errPred, hdrPred, cookPred) (Success st out hdr cook) =
-            let outRes   = (getPredicate outPred) out
-                hdrRes   = (getPredicate hdrPred) hdr
-                cookRes  = (getPredicate cookPred) cook
-            in outRes -- && hdrRes && cookRes
-          combDyn (outPred, errPred, hdrPred, cookPred) (Failure (Left (ApiError st err hdr cook))) =
-            let errRes   = (getPredicate errPred) err
-                hdrRes   = maybe True (getPredicate hdrPred) hdr
-                cookRes  = maybe True (getPredicate cookPred) cook
-            in errRes && hdrRes && cookRes
-          combDyn _ (Failure (Right _ex)) = False
-      preds <- combineDyn4 (,,,) apiOutAssert apiErrAssert headerOutAssert cookieOutAssert
-      display =<< holdDyn True (attachDynWith combDyn preds response)
-      return ()
+  divClass "right-pane" $ do
+    (respAttr, assrAttr) <- divClass "div-head" $ do
+      let defAttr = ("class" =: "tab")
+      rec (rsp, _) <- elDynAttr' "div" respAttr' $ text "Response"
+          (asr, _) <- elDynAttr' "div" assrAttr $ text "Assertion"
+          [respAttr, assrAttr] <- mkSwitchableAttrs [(_el_clicked rsp, defAttr), (_el_clicked asr, defAttr)] []
+          respAttr' <- holdDyn ("class" =: "tab active") $ updated respAttr
+      return (respAttr', assrAttr)
+    elDynAttr "div" respAttr $ do
+      divClass "response" $ text "response: "
+    elDynAttr "div" assrAttr $ do
+      divClass "assert" $ do
+        statusAssert <- divClass "status-assert" $ do
+          divClass "title-text" $ text "Response"
+          divClass "div field" $ do
+            dropdown "Status Code" (constDyn (("Status Code" =: "Status Code") :: Map String String)) $ def
+              & attributes .~ constDyn ("class" =: "assert-field-select")
+            divClass "field-assertion" $ do
+              let defKey = "-- No Selection --" :: Text
+                  disabledWidgetAttr = ("class" =: "disabled-assert assert-widget")
+                  enabledWidgetAttr = ("class" =: "assert-widget")
+              dd <- dropdown defKey (constDyn ("==" =: "==")) def
+              assertWidgetAttr <- holdDyn disabledWidgetAttr $ fmap (\x -> if x == defKey
+                                                                            then disabledWidgetAttr
+                                                                            else enabledWidgetAttr) $ _dropdown_change dd
+              elDynAttr "div" assertWidgetAttr $ do
+                exp <- toWidget (Proxy :: Proxy Int)
+                return ()
+          divClass "div field" $ do
+            dropdown "Status Message" (constDyn (("Status Message" =: "Status Message") :: Map String String)) $ def
+              & attributes .~ constDyn ("class" =: "assert-field-select")
+            divClass "field-assertion" $ do
+              let defKey = "-- No Selection --" :: Text
+                  disabledWidgetAttr = ("class" =: "disabled-assert assert-widget")
+                  enabledWidgetAttr = ("class" =: "assert-widget")
+              dd <- dropdown defKey (constDyn ("==" =: "==")) def
+              assertWidgetAttr <- holdDyn disabledWidgetAttr $ fmap (\x -> if x == defKey
+                                                                            then disabledWidgetAttr
+                                                                            else enabledWidgetAttr) $ _dropdown_change dd
+              elDynAttr "div" assertWidgetAttr $ do
+                exp <- toWidget (Proxy :: Proxy Text)
+                return ()
+        (apiOutAssert :: Dynamic t (Predicate (ApiOut meth r))) <- divClass "api-out-assert" $ do
+          divClass "title-text inline-block" $ text "Api Out"
+          (gAddEvtEl, _) <- elAttr' "span" ("class" =: "plus-button") $ text "+"
+          let gAddEvt = _el_clicked gAddEvtEl
+              displayNone = ("style" =: "display:none")
+          rec let onModalToggle = leftmost [fmap (const True) gAddEvt, fmap (const False) onModalClose, fmap (const False) onAddAssrEvt]
+                  modalClass = ("class" =: "modal-wrapper")
+              modalAttr <- foldDyn (\x _ -> if x then modalClass else displayNone) displayNone onModalToggle
+              (onAddAssrEvt, onModalClose) <- elDynAttr "div" modalAttr $ do
+                divClass "assertion-modal" $ do
+                  (closeEl, _) <- divClass "modal-header" $ do
+                    divClass "title-text inline-block" $ text "Add Assertion"
+                    elAttr' "span" ("class" =: "close-modal") $ text "x"
+                  divClass "modal-body" $ do
+                    let selNameMap = fromList $ map (\x -> ("." <> x, T.unpack x)) $ concat $ map flatten $ selectorNames (Proxy :: Proxy (ApiOut meth r)) []
+                    dd <- dropdown "" (constDyn selNameMap) $ def
+                          & attributes .~ constDyn ("class" =: "modal-field-select")
+                    onAddAssr <- button' "modal-add" "Add +"
+                    renderForest $ selectorNames (Proxy :: Proxy (ApiOut meth r)) []
+                    return $ (tag (pull (sample . current $ _dropdown_value dd)) onAddAssr, _el_clicked closeEl)
+          --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiOut meth r) ()))
+          toAssert (Proxy :: Proxy (ApiOut meth r)) (GAssertState "" onAddAssrEvt)
+        (apiErrAssert :: Dynamic t (Predicate (ApiErr meth r))) <- divClass "api-err-assert" $ do
+          text "api-err"
+          gAddEvt <- button "+"
+          --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiErr meth r) ()))
+          toAssert (Proxy :: Proxy (ApiErr meth r)) (GAssertState "" (fmap (const "") gAddEvt))
+        (headerOutAssert :: Dynamic t (Predicate (HeaderOut meth r))) <- divClass "header-out-assert" $ do
+          text "hd-out"
+          gAddEvt <- button "+"
+          --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (HeaderOut meth r) ()))
+          toAssert (Proxy :: Proxy (HeaderOut meth r)) (GAssertState "" (fmap (const "") gAddEvt))
+        (cookieOutAssert :: Dynamic t (Predicate (CookieOut meth r))) <- divClass "cookie-out-assert" $ do
+          text "cook-out"
+          gAddEvt <- button "+"
+          --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (CookieOut meth r) ()))
+          toAssert (Proxy :: Proxy (CookieOut meth r)) (GAssertState "" (fmap (const "") gAddEvt))
+        let combDyn (outPred, errPred, hdrPred, cookPred) (Success st out hdr cook) =
+              let outRes   = (getPredicate outPred) out
+                  hdrRes   = (getPredicate hdrPred) hdr
+                  cookRes  = (getPredicate cookPred) cook
+              in outRes -- && hdrRes && cookRes
+            combDyn (outPred, errPred, hdrPred, cookPred) (Failure (Left (ApiError st err hdr cook))) =
+              let errRes   = (getPredicate errPred) err
+                  hdrRes   = maybe True (getPredicate hdrPred) hdr
+                  cookRes  = maybe True (getPredicate cookPred) cook
+              in errRes && hdrRes && cookRes
+            combDyn _ (Failure (Right _ex)) = False
+        preds <- combineDyn4 (,,,) apiOutAssert apiErrAssert headerOutAssert cookieOutAssert
+        display =<< holdDyn True (attachDynWith combDyn preds response)
+        return ()
   return $ tag (constant ()) onReq
   where
-    mkReq pw qw fw fiw hw cw md = Req <$> pw 
+    mkReq pw qw fw fiw hw cw md = Req <$> pw
                                       <*> qw
                                       <*> fw
                                       <*> fiw
@@ -299,19 +356,19 @@ mkResponse status respBodyBS =
   where toParamErr :: Either String a -> Either [ParamErr] a
         toParamErr (Left _str) = Left []
         toParamErr (Right r)  = Right r
-               
+
 decodeResponse :: ( Decodings (ContentTypes m r) a
           ) => apiRes m r -> ByteString -> Either String a
 decodeResponse r o = case (Just "application/json") of -- TODO: Needs Response header from reflex
   Just ctype -> let decs = decodings (reproxy r) o
                in maybe (firstRight (map snd decs)) id (mapContentMedia decs ctype)
   Nothing    -> firstRight (map snd (decodings (reproxy r) o))
-  where  
+  where
     reproxy :: apiRes m r -> Proxy (ContentTypes m r)
     reproxy = const Proxy
     firstRight :: [Either String b] -> Either String b
     firstRight = maybe (Left "Couldn't find matching Content-Type") id . find isRight
-      
+
 newtype PathPar t a (isTup :: Bool) = PathPar
   { getPathPar :: ([PathSegment] -> (Dynamic t a)) }
 
@@ -319,7 +376,7 @@ type family IsTuple t where
   IsTuple () = 'True
   IsTuple (t1,t2) = 'True
   IsTuple t       = 'False
-  
+
 pathWidget :: forall t m meth r.
              ( MonadWidget t m
              , ToPathParamWidget
@@ -327,7 +384,7 @@ pathWidget :: forall t m meth r.
              ) => Proxy meth -> Proxy r -> [PathSegment] -> m (Dynamic t (Maybe (PathParam meth r)))
 pathWidget meth r pthSegs = do
   topathParamWidget (undefined :: (PathPar t (PathParam meth r) (IsTuple (PathParam meth r)))) pthSegs
-  
+
 class CtorInfo (f :: * -> *) where
   constructorNames :: proxy f -> [Text]
   constructorNames _ = []
@@ -372,18 +429,19 @@ instance (GToWidget f, CtorInfo f) => GToWidget (D1 c f) where
       _           -> return $ GToWidgetOpts Nothing Nothing
     case ctorNames of
       (_:_:_) -> do  -- SumType
-        sumTyInfo <- forM ctorNames (\cname -> do
-          evt <- button (T.unpack cname)
-          return (cname, fmap (const cname) evt)
-          )
-        attrList <- mkSwitchableAttrs (map snd sumTyInfo) []
-        let sumTyInfoMap = M.fromList (zipWith (\(a, b) c -> (a, (b, c))) sumTyInfo attrList)
-        mapDyn (fmap M1) =<< gToWidget gopts' { state = Just $ GToWidgetState sumTyInfoMap }
+        divClass "sum-wrapper" $ do
+          sumTyInfo <- forM ctorNames (\cname -> do
+            evt <- button (T.unpack cname)
+            return (cname, fmap (const cname) evt)
+            )
+          attrList <- mkSwitchableAttrs (map (\x -> (snd x, ("class" =: "sum-ty"))) sumTyInfo) []
+          let sumTyInfoMap = M.fromList (zipWith (\(a, b) c -> (a, (b, c))) sumTyInfo attrList)
+          mapDyn (fmap M1) =<< gToWidget gopts' { state = Just $ GToWidgetState sumTyInfoMap }
       _ -> mapDyn (fmap M1) =<< gToWidget gopts'
 
 instance (GToWidget f, GToWidget g, CtorInfo f, GToWidget (g :+: h)) => GToWidget (f :+: g :+: h) where
   gToWidget gopts@(GToWidgetOpts gstate def) = do
-    let evtMap = 
+    let evtMap =
           case gstate of
             Just (GToWidgetState em) -> em
             _                        -> M.empty
@@ -396,9 +454,9 @@ instance (GToWidget f, GToWidget g, CtorInfo f, GToWidget (g :+: h)) => GToWidge
 
     fmap joinDyn $ foldDyn (\a _ -> if a == lConName then lDyn else rDyn) lDyn (leftmost $ map (fst .snd) (M.toList evtMap))
 
-instance (GToWidget f, GToWidget g, CtorInfo f, Constructor c) => GToWidget (f :+: C1 c g) where
+instance (GToWidget f, GToWidget g, Typeable g, CtorInfo f, Constructor c) => GToWidget (f :+: C1 c g) where
   gToWidget gopts@(GToWidgetOpts gstate def) = do
-    let evtMap = 
+    let evtMap =
           case gstate of
             Just (GToWidgetState em) -> em
             _                        -> M.empty
@@ -422,13 +480,17 @@ instance (GToWidget a, GToWidget b) => GToWidget (a :*: b) where
     bdyn <- gToWidget gopts'
     combineDyn (\a b -> (:*:) <$> a <*> b) adyn bdyn
 
-instance (GToWidget f, Constructor c) => GToWidget (C1 c f) where
+instance (GToWidget f, Typeable f, Constructor c) => GToWidget (C1 c f) where
   gToWidget gopts = do
     let gopts' = GToWidgetOpts Nothing Nothing
-    elClass "fieldset" "nested-field field" $ do
-      el "legend" $ text $ conName (undefined :: C1 c f ())
-      divClass "field" $ mapDyn (fmap M1) =<< (gToWidget gopts')
-  
+    case eqT :: Maybe (f :~: U1) of
+      Just Refl -> do
+        mapDyn (fmap M1) =<< (gToWidget gopts')
+      _ -> do
+        elClass "fieldset" "nested-field field" $ do
+          el "legend" $ text $ conName (undefined :: C1 c f ())
+          divClass "field" $ mapDyn (fmap M1) =<< (gToWidget gopts')
+
 instance GToWidget U1 where
   gToWidget _ = return $ constDyn (Just U1)
 
@@ -456,7 +518,7 @@ instance ToWidget Text where
     txt <- textInput $ def
         & attributes .~ constDyn ("class" =: "text-box")
     mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
-    
+
 instance ToWidget Int where
   toWidget _ = do
     txt <- textInput $ def
@@ -474,24 +536,25 @@ instance ToWidget () where
 
 instance ToWidget a => ToWidget [a] where
   toWidget _ = do
-    rec addEvt <- button "+"
-        dynValMap <- listWithKeyShallowDiff (M.empty :: M.Map Int ()) (leftmost evtList) createWidget
-        let setNothingAt i = do
-              valMap <- sample. current $ dynValMap
-              return $ Just $ M.mapWithKey (\k a -> if k == i then Nothing else Just ()) valMap
-            addElement = do
-              valMap <- sample. current $ dynValMap
-              lastKey <- sample . current $ lastKeyD
-              return $ M.insert (lastKey + 1) (Just ()) $ M.map (const (Just ())) valMap
-        dynListWithKeys <- mapDyn M.toList dynValMap
-        dynValMap' <- mapDyn (M.map fst) dynValMap
-        let getLastKey (x :: [Int]) = if null x then (-1) else maximum x
-        lastKeyD <- mapDyn (getLastKey . map fst) dynListWithKeys
-        (_, evtsD) <- splitDyn =<< mapDyn (unzip . map snd) dynListWithKeys
-        let modelD = joinDynThroughMap dynValMap'
-        evts <- mapDyn leftmost evtsD -- Remove events
-        let evtList = (tag (pull addElement) addEvt) : [(push setNothingAt $ switchPromptlyDyn evts)]
-    mapDyn (sequence . (map snd) . M.toList) modelD
+    divClass "list-wrapper" $ do
+      rec dynValMap <- listWithKeyShallowDiff (M.empty :: M.Map Int ()) (leftmost evtList) createWidget
+          let setNothingAt i = do
+                valMap <- sample. current $ dynValMap
+                return $ Just $ M.mapWithKey (\k a -> if k == i then Nothing else Just ()) valMap
+              addElement = do
+                valMap <- sample. current $ dynValMap
+                lastKey <- sample . current $ lastKeyD
+                return $ M.insert (lastKey + 1) (Just ()) $ M.map (const (Just ())) valMap
+          dynListWithKeys <- mapDyn M.toList dynValMap
+          dynValMap' <- mapDyn (M.map fst) dynValMap
+          let getLastKey (x :: [Int]) = if null x then (-1) else maximum x
+          lastKeyD <- mapDyn (getLastKey . map fst) dynListWithKeys
+          (_, evtsD) <- splitDyn =<< mapDyn (unzip . map snd) dynListWithKeys
+          let modelD = joinDynThroughMap dynValMap'
+          evts <- mapDyn leftmost evtsD -- Remove events
+          let evtList = (tag (pull addElement) addEvt) : [(push setNothingAt $ switchPromptlyDyn evts)]
+          addEvt <- button "+"
+      mapDyn (sequence . (map snd) . M.toList) modelD
     where
       fn :: MonadSample t m => [Dynamic t (Maybe a)] -> m (Maybe [a])
       fn = (\model -> do
@@ -501,7 +564,6 @@ instance ToWidget a => ToWidget [a] where
       createWidget k _ _ = initNew k
       initNew :: (MonadWidget t m , ToWidget a) => Int -> m (Dynamic t (Maybe a), Event t Int)
       initNew i = do
-        putDebugLn $ show i
         mDyn   <- toWidget (Proxy :: Proxy a)
         onRemove <- button "x"
         mDyn' <- mapDyn (maybe [] (: [])) mDyn
@@ -521,7 +583,7 @@ class ToPathParamWidget (par :: *) (isTup :: Bool) where
 instance ToWidget par => ToPathParamWidget par 'False where
   topathParamWidget _ pthSegs = do
     let (spths1, _:pthSegs1) = break (==Hole) pthSegs
-    forM spths1 $ \spth -> staticPthWid True spth 
+    forM spths1 $ \spth -> staticPthWid True spth
     _1Wid <- toWidget (Proxy :: Proxy par)
     case break (==Hole) pthSegs1 of
       (spths2, []) -> forM spths2 $ \spth -> staticPthWid False spth
@@ -563,60 +625,179 @@ instance ( ToWidget t1
       (spths4, []) -> forM spths4 $ \spth -> staticPthWid False spth
       (_,pths)     -> error "No. of Holes Invariant violated @ (,,) case"
     combineDyn3 (\a b c -> (,,) <$> a <*> b <*> c)  _1Wid _2Wid _3Wid
-  
+
+class GSelectorName (f :: * -> *) where
+  getFieldNames :: Proxy f -> Forest Text -> Forest Text
+
+instance GSelectorName f => GSelectorName (D1 c f) where
+  getFieldNames _ acc = getFieldNames (Proxy :: Proxy f) acc
+
+instance GSelectorName (f :+: g) where
+  getFieldNames _ _ = [] -- TODO:
+
+instance (GSelectorName a, GSelectorName b) => GSelectorName (a :*: b) where
+  getFieldNames _ acc = acc <> getFieldNames (Proxy :: Proxy a) [] <> getFieldNames (Proxy :: Proxy b) acc
+
+instance GSelectorName U1 where
+  getFieldNames _ acc = acc
+
+instance (GSelectorName f) => GSelectorName (C1 c f) where
+  getFieldNames _ acc = getFieldNames (Proxy :: Proxy f) acc
+
+instance (Selector s, SelectorName f) => GSelectorName (S1 s (K1 c f)) where
+  getFieldNames _ _ = let sName = T.pack $ selName (undefined :: S1 s (K1 c f) ())
+                          prefixSName (Node x xs) = Node (sName <> "." <> x) (map prefixSName xs)
+                      in [Node sName (map prefixSName $ selectorNames (Proxy :: Proxy f) [])]
+
+class SelectorName f where
+  selectorNames :: Proxy f -> Forest Text -> Forest Text
+  default selectorNames :: (GSelectorName (Rep f)) => Proxy f -> Forest Text -> Forest Text
+  selectorNames _ acc = getFieldNames (Proxy :: Proxy (Rep f)) acc
+
+instance SelectorName Text where
+  selectorNames _ acc = acc
+
+instance SelectorName Int where
+  selectorNames _ acc = acc
+
+instance SelectorName Bool where
+  selectorNames _ acc = acc
+
+instance SelectorName () where
+  selectorNames _ acc = acc
+
+instance (SelectorName a) => SelectorName [a] where
+  selectorNames _ acc = selectorNames (Proxy :: Proxy a) acc
+
+instance (SelectorName a) => SelectorName (Maybe a) where
+  selectorNames _ acc = selectorNames (Proxy :: Proxy a) acc
+
+data GAssertState t = GAssertState
+  { fieldNameAcc :: Text
+  , globalAddEvent :: Event t Text
+  }
+
 class GAssert f where
-  gAssert :: (MonadWidget t m) => Proxy (f a) -> m (Dynamic t (Predicate (f a)))
+  gAssert :: (MonadWidget t m) => Proxy (f a) -> GAssertState t -> m (Dynamic t (Predicate (f a)))
 
 instance GAssert f => GAssert (D1 c f) where
-  gAssert _ = do
-    mapDyn (contramap unM1) =<< gAssert Proxy
+  gAssert _ gs = do
+    mapDyn (contramap unM1) =<< gAssert Proxy gs
 
 instance GAssert (f :+: g) where
-  gAssert _ = do
-    text "<<TODO: SUM TYPE>>" 
+  gAssert _ _ = do
+    text "<<TODO: SUM TYPE>>"
     return $ constDyn $ Predicate (\_ -> True)
+
 instance (GAssert a, GAssert b) => GAssert (a :*: b) where
-  gAssert _ = do
-    assertA <- gAssert Proxy
-    assertB <- gAssert Proxy
+  gAssert _ gs = do
+    assertA <- gAssert Proxy gs
+    assertB <- gAssert Proxy gs
     let fstPrd (f :*: s) = f
         sndPrd (f :*: s) = s
     aDyn <- mapDyn (contramap fstPrd) assertA
     bDyn <- mapDyn (contramap sndPrd) assertB
     combineDyn (\a b -> Predicate $ \prd -> ((getPredicate a) prd) && ((getPredicate b) prd)) aDyn bDyn
 instance GAssert U1 where
-  gAssert _ = return $ constDyn $ Predicate (\_ -> True)
+  gAssert _ _ = return $ constDyn $ Predicate (\_ -> True)
 
-instance (GAssert f) => GAssert (C1 c f) where
-  gAssert _ = do
-    mapDyn (contramap unM1) =<< gAssert Proxy
+instance (GAssert f, Typeable f, Constructor c) => GAssert (C1 c f) where
+  gAssert _ gs = do
+    case eqT :: Maybe (f :~: U1) of
+      Just Refl -> do
+        mapDyn (contramap unM1) =<< gAssert Proxy gs
+      _ -> do
+        elClass "fieldset" "nested-field field" $ do
+          el "legend" $ text $ conName (undefined :: C1 c f ())
+          divClass "field" $ mapDyn (contramap unM1) =<< gAssert Proxy gs
 
-instance (GAssert f, Selector s) => GAssert (S1 s f) where
-  gAssert _ = do
-    divClass "div field" $ do
-      elAttr "label" ("class" =: "label") $ text $ selName (undefined :: S1 s f ())
-      mapDyn (contramap unM1) =<< gAssert Proxy
-    
-instance (ToWidget f, Typeable f) => GAssert (K1 c f) where
-  gAssert _ = do
-    dropdown ("project" :: Text) (constDyn M.empty) def
-    txt <- textInput $ def
-    let lookupPredFn fnKey = maybe (error "Unknown Fn1") prjFnDyn $ HM.lookup fnKey funTable
-    let succeed _ _ = True
-    fnDyn <- holdDyn (toDynamic (succeed :: ANY -> ANY -> Bool)) ((lookupPredFn . T.pack) <$>_textInput_input txt)
---    fnDyn <- mapDyn (lookupPredFn . T.pack) $ _textInput_value txt
-    valDyn <- toWidget Proxy
-    res <- combineDyn (\fn val -> mkPred fn val) fnDyn valDyn
-    mapDyn (contramap unK1) res
-      where mkPred :: R1D.Dynamic -> Maybe f -> Predicate f
-            mkPred fn Nothing  = Predicate $ const True
-            mkPred fn (Just w) = Predicate $ \v -> unsafeRight $ do
-              pred <- fn `dynApply` (toDynamic v)
-              res  <- pred `dynApply` (toDynamic w)
-              fromDynamic res
-            unsafeRight (Right a) = a
-            unsafeRight _         = error "Expecting only right"
-{-    mapDyn ((contramap unK1) . mkPred) =<< toWidget Proxy
+instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, Assert f1) => GAssert (S1 s f) where
+  gAssert _ (GAssertState fname gAddEvt) = do
+    let fldName = fname <> "." <> T.pack sName
+        sName = selName (undefined :: S1 s f ())
+    (onFieldShow, onFieldAdd) <- headTailE $ push (ifFieldIs fldName) gAddEvt
+    putDebugLnE onFieldShow (\x -> T.unpack fldName)
+    let onFieldPrefix = push (ifFieldHas fldName) gAddEvt
+    p1 <- listWidget onFieldShow onFieldAdd createWidget
+    p2 <- createAssertWidget onFieldPrefix
+    combineDyn (\a b -> Predicate $ \prd -> ((getPredicate a) prd) && ((getPredicate b) prd)) p1 p2
+    where
+      showWidgetOn = foldDyn (\x -> const M.empty) ("style" =: "display:none")
+      toggleWidgetOn showEvt hideEvt = foldDyn (\x _ -> if x then M.empty else ("style" =: "display:none")) ("style" =: "display:none") $ leftmost [fmap (const True) showEvt, fmap (const False) hideEvt]
+      ifFieldHas x y = if T.isPrefixOf x y && x /= y then return (Just ()) else return Nothing
+      ifFieldIs x y = if x == y then return (Just ()) else return Nothing
+      listWidget wgtShowEvt onFieldAdd createWidget = do
+        wgtShowAttr <- showWidgetOn wgtShowEvt
+        elDynAttr "div" wgtShowAttr $ do
+          (addEvtEl, _) <- elAttr' "span" ("class" =: "plus-button float-right") $ text "+"
+          rec dynValMap <- listWithKeyShallowDiff ((0 =: ()) :: M.Map Int ()) (leftmost evtList) createWidget
+              let setNothingAt i = do
+                    valMap <- sample. current $ dynValMap
+                    return $ Just $ M.mapWithKey (\k a -> if k == i then Nothing else Just ()) valMap
+                  addElement = do
+                    valMap <- sample. current $ dynValMap
+                    lastKey <- sample . current $ lastKeyD
+                    return $ M.insert (lastKey + 1) (Just ()) $ M.map (const (Just ())) valMap
+              dynListWithKeys <- mapDyn M.toList dynValMap
+              dynValMap' <- mapDyn (M.map fst) dynValMap
+              let getLastKey (x :: [Int]) = if null x then (-1) else maximum x
+              lastKeyD <- mapDyn (getLastKey . map fst) dynListWithKeys
+              (_, evtsD) <- splitDyn =<< mapDyn (unzip . map snd) dynListWithKeys
+              let modelD = joinDynThroughMap dynValMap'
+              evts <- mapDyn leftmost evtsD -- Remove events
+              let evtList = (tag (pull addElement) addEvt) : [(push setNothingAt $ switchPromptlyDyn evts)]
+                  addEvt = leftmost [_el_clicked addEvtEl, onFieldAdd]
+          mapDyn (combinePredicates . (map snd) . M.toList) modelD
+      createWidget k _ _ = do
+        el "div" $ do
+          let sName = selName (undefined :: S1 s f ())
+          dropdown sName (constDyn (sName =: sName)) $ def
+            & attributes .~ constDyn ("class" =: "assert-field-select")
+          (removeEl, _) <- elAttr' "span" ("class" =: "assert-remove") $ text "-"
+          dyn <- divClass "field-assertion" $ do
+            let defKey = "-- No Selection --" :: Text
+                disabledWidgetAttr = ("class" =: "disabled-assert assert-widget")
+                enabledWidgetAttr = ("class" =: "assert-widget")
+                fldname = fname <> "." <> T.pack sName
+            dd <- dropdown defKey (constDyn ("==" =: "==")) def
+            assertWidgetAttr <- holdDyn disabledWidgetAttr $ fmap (\x -> if x == defKey
+                                                                          then disabledWidgetAttr
+                                                                          else enabledWidgetAttr) $ _dropdown_change dd
+            let lookupPredFn fnKey = maybe (error "Unknown Fn1") prjFnDyn $ HM.lookup fnKey funTable
+            let succeed _ _ = True
+            fnDyn <- holdDyn (toDynamic (succeed :: ANY -> ANY -> Bool)) ((lookupPredFn) <$>_dropdown_change dd)
+            elDynAttr "div" assertWidgetAttr $ do
+              valDyn <- toWidget Proxy
+              res <- combineDyn (\fn val -> mkPred fn val) fnDyn valDyn
+              mapDyn (contramap unM1 . contramap unK1) res
+          return (dyn, tag (constant k) (_el_clicked removeEl))
+      createAssertWidget wgtShowEvt = do
+        rec wgtShowAttr <- toggleWidgetOn wgtShowEvt rmEvt
+            (predDyn, rmEvt) <- elDynAttr "div" wgtShowAttr $ do
+              let sName = selName (undefined :: S1 s f ())
+                  fldname = fname <> "." <> T.pack sName
+              dropdown sName (constDyn (sName =: sName)) $ def
+                & attributes .~ constDyn ("class" =: "assert-field-select")
+              (removeEl, _) <- elAttr' "span" ("class" =: "assert-remove") $ text "-"
+              --elAttr "label" ("class" =: "label") $ text $ selName (undefined :: S1 s f ())
+              dyn <- divClass "field-assertion" $ do
+                el "div" $ do
+                  mapDyn (contramap unM1 . contramap unK1) =<< toAssert (Proxy :: Proxy f1) (GAssertState (fname <> "." <> T.pack sName) gAddEvt)
+              return (dyn, _el_clicked removeEl)
+        return predDyn
+      mkPred :: R1D.Dynamic -> Maybe f1 -> Predicate f1
+      mkPred fn Nothing  = Predicate $ const True
+      mkPred fn (Just w) = Predicate $ \v -> unsafeRight $ do
+        pred <- fn `dynApply` (toDynamic v)
+        res  <- pred `dynApply` (toDynamic w)
+        fromDynamic res
+      unsafeRight (Right a) = a
+      unsafeRight _         = error "Expecting only right"
+
+instance (ToWidget f, Typeable f, Assert f) => GAssert (K1 c f) where
+  {-gAssert _ gs@(GAssertState fname gAddEvt) = do
+
+    mapDyn ((contramap unK1) . mkPred) =<< toWidget Proxy
       where mkPred Nothing  = Predicate $ const False
             mkPred (Just p) = p
 
@@ -626,6 +807,29 @@ instance (ToWidget a, Eq a) => ToWidget (Predicate a) where
       where mkPred Nothing  = Nothing
             mkPred (Just w) = Just $ Predicate $ \v -> v == w
 -}
+
+class Assert a where
+  toAssert :: (MonadWidget t m) => Proxy a -> GAssertState t -> m (Dynamic t (Predicate a))
+  default toAssert :: (MonadWidget t m, Generic a, GAssert (Rep a)) => Proxy a -> GAssertState t -> m (Dynamic t (Predicate a))
+  toAssert _ gs = mapDyn (contramap from) =<< gAssert Proxy gs
+
+instance Assert Text where
+  toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)
+
+instance Assert Int where
+  toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)
+
+instance Assert Bool where
+  toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)
+
+instance Assert () where
+  toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)
+
+instance Assert [a] where
+  toAssert _ gs = mapDyn (contramap from) =<< gAssert Proxy gs
+
+instance Assert (Maybe a) where
+  toAssert _ gs = mapDyn (contramap from) =<< gAssert Proxy gs
 
 data WidgetBox = forall a.(ToWidget a) => WidgetBox (Proxy a)
 
@@ -664,7 +868,7 @@ unapply :: PrjVal -> PrjVal
 unapply v@(Val _) = v
 unapply (ProjectedVal _ nextVal) = nextVal
 
-  
+
 combineDyn3 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> m (Dynamic t d)
 combineDyn3 f da db dc = (combineDyn (\c (a, b) -> f a b c) dc) =<< (combineDyn (,) da db)
 
@@ -679,7 +883,7 @@ combineDyn6 fn da db dc dd de df = (combineDyn (\f (a, b, c, d, e) -> fn a b c d
 
 combineDyn7 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d -> e -> f -> g -> h) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> (Dynamic t d) -> Dynamic t e -> Dynamic t f -> Dynamic t g -> m (Dynamic t h)
 combineDyn7 fn da db dc dd de df dg = (combineDyn (\g (a, b, c, d, e, f) -> fn a b c d e f g) dg) =<< (combineDyn6 (,,,,,) da db dc dd de df)
-                  
+
 emptyParamWidget ::  MonadWidget t m => m (Dynamic t (Maybe ()))
 emptyParamWidget = return $ constDyn $ Just ()
 
@@ -702,3 +906,6 @@ mkXhrReq methD urlD fpD = do
             $ def { _xhrRequestConfig_headers = headerUrlEnc
                   , _xhrRequestConfig_sendData = Just body
                   }
+
+combinePredicates :: [Predicate a] -> Predicate a
+combinePredicates xs = Predicate $ \x -> all id $ map (($ x) . getPredicate) xs

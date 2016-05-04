@@ -10,7 +10,6 @@ pageTemplate = do
         link attrs = elAttr "link" attrs $ return ()
         script src = elAttr "script" ("src" =: src) $ return ()
         mainCSS = "/css/main.css"
---        zeptoJS = "/js/zepto.js"
         scriptJS = "/js/script.js"
     meta ( "charset" =: "utf-8" )
     meta ( "name"    =: "viewport"
@@ -22,5 +21,4 @@ pageTemplate = do
     el "title" $ text "Api Console"
     link ( "rel" =: "stylesheet"
         <> "href" =: mainCSS)
---    script zeptoJS
     script scriptJS

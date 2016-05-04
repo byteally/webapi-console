@@ -1,6 +1,6 @@
 {-# LANGUAGE DataKinds, TypeOperators, TypeFamilies, FlexibleInstances, MultiParamTypeClasses, DeriveGeneric, DeriveAnyClass #-}
 
--- | 
+-- |
 
 module TestApi where
 
@@ -26,23 +26,31 @@ data UserQuery = UserQuery
   { qUserId :: Maybe Int
   , qUserName :: Text
   , qUserBool :: Bool
-  } deriving (Show, Eq, Generic, ToJSON)
+  } deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
 data User = User
   { userId :: Int
   , userName :: [Text]
   , userAge :: Int
   , userType :: UserType
+  , userQuery :: UserQuery
+  , location :: LatLng
+  } deriving (Show, Eq, Generic, ToJSON, FromJSON)
+
+data LatLng = LatLng
+  { lat :: Int
+  , lng :: Int
   } deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
 data UserType = Nobody Int | Normal Int | Admin Int
   deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
 instance ToParam UserType 'QueryParam
+instance ToParam LatLng 'QueryParam
 
 instance ToParam UserQuery 'QueryParam
 instance ToParam User 'QueryParam
-  
+
 instance ApiContract TestApp GET UserR where
   type QueryParam GET UserR = UserQuery
   type ApiOut GET UserR = User
@@ -52,8 +60,17 @@ instance ApiContract TestApp GET ProfileR where
   type ApiOut GET ProfileR = ()
 
 instance ToWidget UserType
+instance Assert UserType
+instance SelectorName UserType
 instance ToWidget UserQuery
+instance Assert UserQuery
+instance SelectorName UserQuery
 instance ToWidget User
+instance Assert User
+instance SelectorName User
+instance ToWidget LatLng
+instance Assert LatLng
+instance SelectorName LatLng
 
 consoleApp :: IO ()
-consoleApp = apiConsole (ConsoleConfig (URI "http:" (Just (URIAuth "" "localhost" ":9000")) "" "" "")) (Proxy :: Proxy TestApp)
+consoleApp = apiConsole (ConsoleConfig (URI "http:" (Just (URIAuth "" "192.168.1.13" ":9000")) "" "" "")) (Proxy :: Proxy TestApp)
