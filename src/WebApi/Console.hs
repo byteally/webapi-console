@@ -78,6 +78,7 @@ type family ConsoleCtx api m r :: Constraint where
                        , Assert (ApiErr m r)
                        , HeaderOut m r ~ ()
                        , CookieOut m r ~ ()
+                       , RequestBody m r ~ '[]
                        , ParamErrToApiErr (ApiErr m r)
                        , SingMethod m
                        )
@@ -176,6 +177,7 @@ paramWidget ::  forall t m meth r api.
                , Assert (ApiErr meth r)
                , HeaderOut meth r ~ ()
                , CookieOut meth r ~ ()
+               , RequestBody meth r ~ '[]
                , ConsoleCtx api meth r
                ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> Event t () -> m (Event t ())
 paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
@@ -322,13 +324,13 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
         return ()
   return $ tag (constant ()) onReq
   where
-    mkReq pw qw fw fiw hw cw md = Req <$> pw
+    mkReq pw qw fw fiw hw cw md = Request <$> pw
                                       <*> qw
                                       <*> fw
                                       <*> fiw
                                       <*> hw
                                       <*> cw
-                                      <*> pure md
+                                      <*> pure ()
 
 -- TODO: Dup from WebApi package
 mkResponse :: forall m r.( Decodings (ContentTypes m r) (ApiOut m r)
