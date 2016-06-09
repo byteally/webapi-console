@@ -21,6 +21,7 @@ import Data.List
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as ASCII
+import Data.ByteString.Lazy (toStrict)
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
@@ -48,6 +49,8 @@ import qualified Data.Rank1Dynamic as R1D (Dynamic)
 import Data.Rank1Dynamic hiding (Dynamic)
 import Data.Rank1Typeable hiding (V1)
 import Control.Exception
+import Data.Either
+import Data.Aeson.Encode.Pretty
 
 foreign import javascript unsafe "console.log($1)" js_log :: JSString -> IO ()
 
@@ -69,6 +72,7 @@ type family ConsoleCtx api m r :: Constraint where
                        , FromHeader (HeaderOut m r)
                        , Decodings (ContentTypes m r) (ApiOut m r)
                        , Decodings (ContentTypes m r) (ApiErr m r)
+                       , ToJSON (ApiOut m r)
                        , Generic (ApiOut m r)
                        --, GAssert (Rep (ApiOut m r))
                        , SelectorName (ApiOut m r)
@@ -157,8 +161,9 @@ mkRouteTplStr :: [PathSegment] -> [Text] -> [Text]
 mkRouteTplStr (StaticSegment p:pths) treps = p : (mkRouteTplStr pths treps)
 mkRouteTplStr (Hole : pths) (trep : treps) = trep : (mkRouteTplStr pths treps)
 mkRouteTplStr (Hole : pths) []             = error "Panic: @mkRouteTplStr: not sufficient args to fill the hole"
+mkRouteTplStr [] ["{()}"]                  = []
 mkRouteTplStr [] []                        = []
-mkRouteTplStr [] treps                     = error "Panic: @mkRouteTplStr: more dynamic args found than the required"
+mkRouteTplStr [] treps                     = error $ "Panic: @mkRouteTplStr: more dynamic args found than the required" ++ (show treps)
 
 paramWidget ::  forall t m meth r api.
                ( MonadWidget t m
@@ -170,6 +175,7 @@ paramWidget ::  forall t m meth r api.
                , ToPathParamWidget (PathParam meth r) (IsTuple (PathParam meth r))
                , Decodings (ContentTypes meth r) (ApiOut meth r)
                , Decodings (ContentTypes meth r) (ApiErr meth r)
+               , ToJSON (ApiOut meth r) -- TODO: Haack
                , Generic (ApiOut meth r)
                , SelectorName (ApiOut meth r)
                , Assert (ApiOut meth r)
@@ -239,6 +245,11 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
       return (respAttr', assrAttr)
     elDynAttr "div" respAttr $ do
       divClass "response" $ text "response: "
+      let prettyOut :: ToJSON (ApiOut meth r) => Response meth r -> String
+          prettyOut (Success _ out _ _) = ASCII.unpack $ toStrict $ encodePretty out
+          prettyOut _                   = "Error getting response"
+      el "pre" $ dynText =<< (holdDyn ("Loading..") $ fmap prettyOut response)
+      --dynText =<< (holdDyn ("Loading..") $ fmap (either (const "Error getting response") (T.unpack . snd)) res)
     elDynAttr "div" assrAttr $ do
       divClass "assert" $ do
         statusAssert <- divClass "status-assert" $ do
