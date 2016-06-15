@@ -51,6 +51,7 @@ import Data.Rank1Typeable hiding (V1)
 import Control.Exception
 import Data.Either
 import Data.Aeson.Encode.Pretty
+import Data.Time.Clock
 
 foreign import javascript unsafe "console.log($1)" js_log :: JSString -> IO ()
 
@@ -73,12 +74,8 @@ type family ConsoleCtx api m r :: Constraint where
                        , Decodings (ContentTypes m r) (ApiOut m r)
                        , Decodings (ContentTypes m r) (ApiErr m r)
                        , ToJSON (ApiOut m r)
-                       , Generic (ApiOut m r)
-                       --, GAssert (Rep (ApiOut m r))
                        , SelectorName (ApiOut m r)
                        , Assert (ApiOut m r)
-                       , Generic (ApiErr m r)
-                       --, GAssert (Rep (ApiErr m r))
                        , Assert (ApiErr m r)
                        , HeaderOut m r ~ ()
                        , CookieOut m r ~ ()
@@ -163,7 +160,7 @@ mkRouteTplStr (Hole : pths) (trep : treps) = trep : (mkRouteTplStr pths treps)
 mkRouteTplStr (Hole : pths) []             = error "Panic: @mkRouteTplStr: not sufficient args to fill the hole"
 mkRouteTplStr [] ["{()}"]                  = []
 mkRouteTplStr [] []                        = []
-mkRouteTplStr [] treps                     = error $ "Panic: @mkRouteTplStr: more dynamic args found than the required" ++ (show treps)
+mkRouteTplStr [] treps                     = [] --error $ "Panic: @mkRouteTplStr: more dynamic args found than the required" ++ (show treps)
 
 paramWidget ::  forall t m meth r api.
                ( MonadWidget t m
@@ -176,10 +173,8 @@ paramWidget ::  forall t m meth r api.
                , Decodings (ContentTypes meth r) (ApiOut meth r)
                , Decodings (ContentTypes meth r) (ApiErr meth r)
                , ToJSON (ApiOut meth r) -- TODO: Haack
-               , Generic (ApiOut meth r)
                , SelectorName (ApiOut meth r)
                , Assert (ApiOut meth r)
-               , Generic (ApiErr meth r)
                , Assert (ApiErr meth r)
                , HeaderOut meth r ~ ()
                , CookieOut meth r ~ ()
@@ -400,7 +395,6 @@ pathWidget meth r pthSegs = do
 
 class CtorInfo (f :: * -> *) where
   constructorNames :: proxy f -> [Text]
-  constructorNames _ = []
 
 instance CtorInfo f => CtorInfo (D1 c f) where
   constructorNames _ = constructorNames (Proxy :: Proxy f)
@@ -408,16 +402,8 @@ instance CtorInfo f => CtorInfo (D1 c f) where
 instance (CtorInfo x, CtorInfo y) => CtorInfo (x :+: y) where
   constructorNames _ = constructorNames (Proxy :: Proxy x) ++ constructorNames (Proxy :: Proxy y)
 
-instance (Constructor c, CtorInfo f) => CtorInfo (C1 c f) where
+instance (Constructor c) => CtorInfo (C1 c f) where
   constructorNames _ = [T.pack $ conName (undefined :: t c f a)]
-
-instance (Selector s, CtorInfo f) => CtorInfo (S1 s f) where
-
-instance CtorInfo (K1 i c) where
-
-instance CtorInfo (f :*: g) where
-
-instance CtorInfo U1 where
 
 type DynamicAttr t = Dynamic t (Map String String)
 
@@ -459,11 +445,11 @@ instance (GToWidget f, GToWidget g, CtorInfo f, GToWidget (g :+: h)) => GToWidge
             Just (GToWidgetState em) -> em
             _                        -> M.empty
         lConName         = head $ constructorNames (Proxy :: Proxy f)
-        (lEvt, lDynAttr) = fromMaybe (error "PANIC!: Constructor lookup failed @ GToWidget (f :+: g)") (M.lookup lConName evtMap)
+        (lEvt, lDynAttr) = fromMaybe (error $ "PANIC!: Constructor lookup failed @ GToWidget (f :+: g)" ++ (T.unpack lConName) ++ (show $ M.keys evtMap)) (M.lookup lConName evtMap)
     lDyn <- mapDyn (fmap L1) =<< do
       elDynAttr "div" lDynAttr $ do
-        gToWidget (GToWidgetOpts (Just $ GToWidgetState (M.delete lConName evtMap)) Nothing)
-    rDyn <- mapDyn (fmap R1) =<< gToWidget (GToWidgetOpts (Just $ GToWidgetState (M.delete lConName evtMap)) Nothing)
+        gToWidget (GToWidgetOpts (Just $ GToWidgetState ({-M.delete lConName-} evtMap)) Nothing)
+    rDyn <- mapDyn (fmap R1) =<< gToWidget (GToWidgetOpts (Just $ GToWidgetState ({-M.delete lConName-} evtMap)) Nothing)
 
     fmap joinDyn $ foldDyn (\a _ -> if a == lConName then lDyn else rDyn) lDyn (leftmost $ map (fst .snd) (M.toList evtMap))
 
@@ -474,12 +460,12 @@ instance (GToWidget f, GToWidget g, Typeable g, CtorInfo f, Constructor c) => GT
             Just (GToWidgetState em) -> em
             _                        -> M.empty
         lConName         = head $ constructorNames (Proxy :: Proxy f)
-        (lEvt, lDynAttr) = fromMaybe (error "PANIC!: Constructor lookup failed @ GToWidget (f :+: C1 c f)") (M.lookup lConName evtMap)
+        (lEvt, lDynAttr) = fromMaybe (error $ "PANIC!: Constructor lookup failed @ GToWidget (f :+: C1 c f)" ++ (T.unpack lConName) ++ (show $ M.keys evtMap)) (M.lookup lConName evtMap)
         rConName         = T.pack $ conName (undefined :: t c g a)
-        (rEvt, rDynAttr) = fromMaybe (error "PANIC!: Constructor lookup failed @ GToWidget (f :+: C1 c f)") (M.lookup rConName evtMap)
+        (rEvt, rDynAttr) = fromMaybe (error $ "PANIC!: Constructor lookup failed @ GToWidget (f :+: C1 c f)" ++ (T.unpack lConName) ++ (show $ M.keys evtMap)) (M.lookup rConName evtMap)
     lDyn <- mapDyn (fmap L1) =<< do
       elDynAttr "div" lDynAttr $ do
-        gToWidget (GToWidgetOpts (Just $ GToWidgetState (M.delete lConName evtMap)) Nothing)
+        gToWidget (GToWidgetOpts (Just $ GToWidgetState ({-M.delete lConName-} evtMap)) Nothing)
     rDyn <- mapDyn (fmap R1) =<< do
       elDynAttr "div" rDynAttr $ do
         gToWidget (GToWidgetOpts Nothing Nothing)
@@ -539,6 +525,13 @@ instance ToWidget Int where
         & attributes .~ constDyn ("class" =: "text-box")
     mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
 
+instance ToWidget Double where
+  toWidget _ = do
+    txt <- textInput $ def
+        & textInputConfig_inputType .~ "number"
+        & attributes .~ constDyn ("class" =: "text-box")
+    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt    
+
 instance ToWidget Bool where
   toWidget _ = do
     chk <- checkbox False def
@@ -546,6 +539,12 @@ instance ToWidget Bool where
 
 instance ToWidget () where
   toWidget _ = emptyParamWidget
+
+instance ToWidget UTCTime where
+  toWidget _ = do
+    txt <- textInput $ def
+        & attributes .~ constDyn ("class" =: "text-box")
+    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt  
 
 instance ToWidget a => ToWidget [a] where
   toWidget _ = do
@@ -896,6 +895,30 @@ combineDyn6 fn da db dc dd de df = (combineDyn (\f (a, b, c, d, e) -> fn a b c d
 
 combineDyn7 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d -> e -> f -> g -> h) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> (Dynamic t d) -> Dynamic t e -> Dynamic t f -> Dynamic t g -> m (Dynamic t h)
 combineDyn7 fn da db dc dd de df dg = (combineDyn (\g (a, b, c, d, e, f) -> fn a b c d e f g) dg) =<< (combineDyn6 (,,,,,) da db dc dd de df)
+
+combineDyn8 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> m (Dynamic t a9)
+combineDyn8 fn a1 a2 a3 a4 a5 a6 a7 a8 = (combineDyn (\a8' (a1', a2', a3', a4', a5', a6', a7') -> fn a1' a2' a3' a4' a5' a6' a7' a8') a8) =<< (combineDyn7 (,,,,,,) a1 a2 a3 a4 a5 a6 a7)
+
+combineDyn9 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> m (Dynamic t a10)
+combineDyn9 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 = (combineDyn (\a9' (a1', a2', a3', a4', a5', a6', a7', a8') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9') a9) =<< (combineDyn8 (,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8)
+
+combineDyn10 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> m (Dynamic t a11)
+combineDyn10 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 = (combineDyn (\a10' (a1', a2', a3', a4', a5', a6', a7', a8', a9') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10') a10) =<< (combineDyn9 (,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9)
+
+combineDyn11 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> m (Dynamic t a12)
+combineDyn11 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 = (combineDyn (\a11' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11') a11) =<< (combineDyn10 (,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10)
+
+combineDyn12 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12 -> a13) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> Dynamic t a12 -> m (Dynamic t a13)
+combineDyn12 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 = (combineDyn (\a12' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10', a11') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11' a12') a12) =<< (combineDyn11 (,,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
+
+combineDyn13 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12 -> a13 -> a14) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> Dynamic t a12 -> Dynamic t a13 -> m (Dynamic t a14)
+combineDyn13 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 = (combineDyn (\a13' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10', a11', a12') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11' a12' a13') a13) =<< (combineDyn12 (,,,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
+
+combineDyn14 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12 -> a13 -> a14 -> a15) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> Dynamic t a12 -> Dynamic t a13 -> Dynamic t a14 -> m (Dynamic t a15)
+combineDyn14 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 = (combineDyn (\a14' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10', a11', a12', a13') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11' a12' a13' a14') a14) =<< (combineDyn13 (,,,,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
+
+combineDyn15 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12 -> a13 -> a14 -> a15 -> a16) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> Dynamic t a12 -> Dynamic t a13 -> Dynamic t a14 -> Dynamic t a15 -> m (Dynamic t a16)
+combineDyn15 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 = (combineDyn (\a15' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10', a11', a12', a13', a14') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11' a12' a13' a14' a15') a15) =<< (combineDyn14 (,,,,,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
 
 emptyParamWidget ::  MonadWidget t m => m (Dynamic t (Maybe ()))
 emptyParamWidget = return $ constDyn $ Just ()
