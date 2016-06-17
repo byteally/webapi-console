@@ -38,7 +38,7 @@ library
                      , http-media   == 0.6.*
                      , bytestring   >=0.10 && <0.11
                      , vector       >=0.10 && < 0.12
-                     , aeson        >=0.8 && <0.10
+                     , aeson        >=0.8 && <0.12
                      , containers   >=0.5 && <0.6
                      , transformers == 0.4.*
                      , lens         == 4.13.*
@@ -51,6 +51,7 @@ library
 
 executable webapi-console-test
   hs-source-dirs:      tests
+  other-modules:       TestApi
   main-is:             Main.hs
   ghc-options:         -Wall
   build-depends:       base

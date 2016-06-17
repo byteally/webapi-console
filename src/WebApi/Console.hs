@@ -52,6 +52,8 @@ import Control.Exception
 import Data.Either
 import Data.Aeson.Encode.Pretty
 import Data.Time.Clock
+import Data.Time.Calendar
+import Data.Time.LocalTime
 
 foreign import javascript unsafe "console.log($1)" js_log :: JSString -> IO ()
 
@@ -544,7 +546,33 @@ instance ToWidget UTCTime where
   toWidget _ = do
     txt <- textInput $ def
         & attributes .~ constDyn ("class" =: "text-box")
-    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt  
+    dynText $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+
+instance ToWidget LocalTime where
+  toWidget _ = do
+    txt <- textInput $ def
+        & textInputConfig_inputType .~ "datetime-local"
+        & attributes .~ (constDyn $ M.fromList [("class", "text-box"), ("step", "1")])
+    dynText $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt    
+
+instance ToWidget Day where
+  toWidget _ = do
+    txt <- textInput $ def
+        & textInputConfig_inputType .~ "date"
+        & attributes .~ constDyn ("class" =: "text-box")
+    dynText $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+
+instance ToWidget TimeOfDay where
+  toWidget _ = do
+    txt <- textInput $ def
+        & textInputConfig_inputType .~ "time"
+        & attributes .~ (constDyn $ M.fromList [("class", "text-box"), ("step", "1")])
+    dynText $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+
 
 instance ToWidget a => ToWidget [a] where
   toWidget _ = do
@@ -678,6 +706,18 @@ instance SelectorName Bool where
 instance SelectorName () where
   selectorNames _ acc = acc
 
+instance SelectorName UTCTime where
+  selectorNames _ acc = acc
+
+instance SelectorName LocalTime where
+  selectorNames _ acc = acc  
+
+instance SelectorName Day where
+  selectorNames _ acc = acc  
+
+instance SelectorName TimeOfDay where
+  selectorNames _ acc = acc
+  
 instance (SelectorName a) => SelectorName [a] where
   selectorNames _ acc = selectorNames (Proxy :: Proxy a) acc
 
@@ -836,6 +876,18 @@ instance Assert Bool where
 
 instance Assert () where
   toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)
+
+instance Assert UTCTime where
+  toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)
+
+instance Assert LocalTime where
+  toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)  
+
+instance Assert Day where
+  toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)
+
+instance Assert TimeOfDay where
+  toAssert _ _ = return $ constDyn $ Predicate (\_ -> True)  
 
 instance Assert [a] where
   toAssert _ gs = mapDyn (contramap from) =<< gAssert Proxy gs
