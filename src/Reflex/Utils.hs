@@ -72,14 +72,16 @@ button' cls txt = do
   (e, _) <- elAttr' "button" ("class" =: cls) $ text txt
   return (_el_clicked e)
 
-renderForest :: MonadWidget t m => Forest Text -> m ()
-renderForest xs = el "ul" $ do
-    mapM renderTree xs
-    return ()
+renderForest :: MonadWidget t m => Forest Text -> m (Event t Text)
+renderForest xs = do
+    evts <- mapM renderTree xs
+    return $ leftmost evts
   where
-    renderTree (Node t ts) = el "ul" $ do
-      el "li" $ text $ T.unpack t
-      el "li" $ renderForest ts
+    renderTree (Node t ts) = do
+      (elem, _) <- el' "li" $ text $ T.unpack t
+      el "ul" $ do
+        evt <- el "li" $ renderForest ts
+        return $ leftmost [fmap (const t) (domEvent Click elem), evt]
 
 putDebugLnE :: MonadWidget t m => Event t a -> (a -> String) -> m ()
 putDebugLnE e mkStr = do

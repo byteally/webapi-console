@@ -60,17 +60,17 @@ instance ApiContract TestApp GET ProfileR where
   type ApiOut GET ProfileR = ()
 
 instance ToWidget UserType
-instance Assert UserType
+instance AssertWidget UserType
 instance SelectorName UserType
 instance ToWidget UserQuery
-instance Assert UserQuery
+instance AssertWidget UserQuery
 instance SelectorName UserQuery
 instance ToWidget User
-instance Assert User
+instance AssertWidget User
 instance SelectorName User
 instance ToWidget LatLng
-instance Assert LatLng
+instance AssertWidget LatLng
 instance SelectorName LatLng
 
 consoleApp :: IO ()
-consoleApp = apiConsole (ConsoleConfig (URI "http:" (Just (URIAuth "" "192.168.1.13" ":9000")) "" "" "")) (Proxy :: Proxy TestApp)
+consoleApp = apiConsole (ConsoleConfig (URI "http:" (Just (URIAuth "" "192.168.1.14" ":9000")) "" "" "")) (Proxy :: Proxy TestApp)

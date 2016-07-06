@@ -4,7 +4,7 @@ html {
   -webkit-text-size-adjust: 100%;
   color: #4a4a4a;
   font-weight: normal;
-  font-size: 0.95em;
+  font-size: 0.9em;
   min-width: 1024px;
 }
 
@@ -104,6 +104,8 @@ h1 {
     margin: 0;
     font-size: 1.5em;
     font-weight: normal;
+    display: inline-block;
+    margin-right: 1em;
 }
 
 .apiconsole {
@@ -169,14 +171,14 @@ h1 {
 .endpoint-selector {
     margin-top: 2em;
     margin-bottom: 1em;
-    padding: 1em 1em;
+    padding: 1em 1em 1em 0;
 }
 
 .dropdown {
     display: inline-block;
-    margin: 0 1em;
-    width: 38%;
-    max-width: 400px;
+    margin: 0 1em 0 0;
+    width: 50%;
+    max-width: 600px;
     font-size: 1em;
     position: relative;
     color: #4a4a4a;
@@ -199,8 +201,9 @@ h1 {
     position: absolute;
     right: 0.8em;
     content: ' \25bc';
-    color: #fff;
-    font-size: 14px;
+    color: #CCCCCC;
+    font-size: 12px;
+    margin-top: 0.2em;
 }
 
 .dropdown > ul {
@@ -228,7 +231,7 @@ h1 {
 }
 
 .param-type-wrapper > fieldset, .param-type-wrapper > div {
-    margin: 1em 0.5em 1.4em 1em;
+    margin: 1em 0.5em 1.4em 0;
 }
 
 .param-type-wrapper::before {
@@ -269,7 +272,7 @@ h1 {
 }
 
 .field {
-    padding: 0.25em 1em 0 0.4em;
+    padding: 0.25em 1em 0 0.2em;
     margin-bottom: 0.4em;
     min-height: 1.875em;
 }
@@ -283,11 +286,11 @@ h1 {
 }
 
 .field:nth-child(even) {
-    border-left: 10px solid #C8ECA3;
+    border-left: 5px solid #C8ECA3;
 }
 
 .field:nth-child(odd) {
-    border-left: 10px solid #B7D6EE;
+    border-left: 5px solid #B7D6EE;
 }
 
 fieldset.field {
@@ -295,12 +298,12 @@ fieldset.field {
 }
 
 .field > .label {
-    display: inline-block;
+    display: block;
     font-size: 1em;
     min-width: 80px;
     text-transform: capitalize;
-    padding-left: 0.6em;
-    padding-right: 0.6em;
+    padding-left: 0.2em;
+    margin-bottom: 0.4em;
 }
 
 .assert {
@@ -335,7 +338,7 @@ fieldset.field {
     padding: 0.2em;
 }
 
-.field-assertion > select {
+.field-assertion > select, .sum-wrapper > select {
     background: white;
     padding: 0.35em 0.6em;
     border-radius: 4px;
@@ -354,6 +357,7 @@ fieldset.field {
     width: 60%;
     max-width: 300px;
     box-shadow: none;
+    margin-bottom: 0.5em;
 }
 
 .disabled-assert {
@@ -365,14 +369,30 @@ fieldset.field {
     background: #EEEEEE;
 }
 
+.assert-pass {
+    background-image: url(../img/assert-tick.png);
+}
+
+.assert-fail {
+    background-image: url(../img/assert-cross.png);
+}
+
+.assert-pass, .assert-fail {
+    height: 1.5em;
+    width: 1.5em;
+    background-size: cover;
+    display: inline-block;
+    vertical-align: bottom;
+    margin-right: 0.5em;
+}
+
 .nested-field {
     padding: 0;
-    padding-left: 0.8em;
+    padding-left: 0.3em;
 }
 
 .text-box {
-    border: 1px solid #9b9b9b;
-    box-shadow: 0px 1px 3px #d1d1d1 inset;
+    border: 1px solid #CEE2F9;
     padding: 0.5em 0.6em;
     border-radius: 4px;
     box-sizing: border-box;
@@ -389,7 +409,23 @@ fieldset.field {
 
 .field > .text-box {
     width: 69%;
+}
 
+.maybe-wrapper > input[type="checkbox"] {
+    margin-right: 1em;
+}
+
+.sum-wrapper > select {
+    width: auto;
+}
+
+.sum-ty > fieldset > legend {
+    display: none;
+}
+
+.sum-ty > fieldset > .field {
+    border: 0;
+    margin-bottom: 0;
 }
 
 .send {
@@ -411,7 +447,7 @@ fieldset.field {
 
 .div-head {
     border-bottom: 1px solid #DFDFDF;
-    padding: 1.5em 3em;
+    padding: 1em;
     position: relative;
 }
 
@@ -455,8 +491,8 @@ fieldset.field {
 
 .div-head > .tab.active {
     display: inline-block;
-    background: #4A90E2;
-    color: #FFFFFF;
+    border: 1px solid #4A90E2;
+    color: #4A90E2;
 }
 
 .tab {
@@ -487,6 +523,14 @@ fieldset.field {
     max-width: 320px;
 }
 
+.list-wrapper > input {
+    width: 85%;
+}
+
+.list-wrapper > .plus-button {
+    margin-left: 0.5em;
+}
+
 .assert-remove {
     font-weight: bold;
     cursor: pointer;
@@ -507,14 +551,21 @@ fieldset.field {
     font-weight: bold;
     margin-bottom: 1em;
     font-size: 0.875em;
+    min-width: 80px;
 }
 
-.plus-button {
+.plus-button, .cross-button {
     font-size: 1.5em;
     font-weight: bold;
     margin-left: 1em;
     color: #4A90E2;
     cursor: pointer;
+}
+
+.cross-button {
+    transform: rotate(45deg);
+    display: inline-block;
+    margin-left: 0;
 }
 
 .modal-wrapper {
@@ -538,9 +589,33 @@ fieldset.field {
     max-width: 600px;
     top: 1em;
     max-height: 100%;
-    height: 550px;
+    /*height: 550px;*/
     background: white;
     margin: auto;
+}
+
+.field-selection-tree {
+  list-style: none;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.field-selection-tree ul {
+  margin-left: 0.5em;
+  padding-left: 0.5em;
+  border-left: 1px solid #CCCCCC;
+}
+
+.field-selection-tree li {
+  cursor: pointer;
+  font-weight: normal;
+}
+
+.field-selection-tree li:hover {
+  font-weight: bold;
+}
+.response {
+  padding: 1em;
 }
 
 .modal-header {
