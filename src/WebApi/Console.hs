@@ -18,6 +18,7 @@ import WebApi
 import GHC.Exts
 import Network.URI
 import Data.List
+import           Data.CaseInsensitive  ( original )
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as ASCII
@@ -194,7 +195,7 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
     let methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)
     rec
       divClass "request-url" $ dynText urlDyn
-      (urlDyn, encodedFormParDyn) <- divClass "params" $ do
+      (urlDyn, encodedFormParDyn, hdrIn) <- divClass "params" $ do
         queryWidget <- divClass "param-type-wrapper query" $ do
           --divClass "param-type query" $ return ()
           toWidget (Proxy :: Proxy (QueryParam meth r))
@@ -224,9 +225,11 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
         formParMapDyn <- mapDyn (fmap (toFormParam . formParam)) requestDyn
         encodedFormParDyn <- mapDyn ((fromMaybe "") . fmap (renderSimpleQuery False)) formParMapDyn
         linkDyn <- mapDyn ((fromMaybe "") . (fmap (\req -> show $ WebApi.link (undefined :: meth, undefined :: r) baseUrl (pathParam req) (Just $ queryParam req)))) requestDyn
-        return (linkDyn, encodedFormParDyn)
+        let toHdrStrs hdrs = M.fromList $ fmap (\(k, v) -> (ASCII.unpack $ original k, ASCII.unpack v)) hdrs
+        hdrIn <- mapDyn (fmap (toHdrStrs . toHeader . headerIn)) requestDyn
+        return (linkDyn, encodedFormParDyn, hdrIn)
       -- display encodedFormParDyn
-    return $ tag (pull $ mkXhrReq methDyn urlDyn encodedFormParDyn) onSubmit
+    return $ tag (pull $ mkXhrReq methDyn urlDyn encodedFormParDyn hdrIn) onSubmit
   resE <- performRequestAsyncWithError onReq
   let res = fmap (\r -> case r of
                      Left ex -> Left ex
@@ -1024,12 +1027,14 @@ mkXhrReq :: Reflex t
          => Dynamic t Text
          -> Dynamic t String
          -> Dynamic t BS.ByteString
+         -> Dynamic t (Maybe (Map String String))
          -> PullM t XhrRequest
-mkXhrReq methD urlD fpD = do
+mkXhrReq methD urlD fpD hdrInD = do
   meth <- sample . current $ methD
   url  <- sample . current $ urlD
   fp   <- sample . current $ fpD
-  let headerUrlEnc = if BS.null fp then M.empty else "Content-type" =: "application/x-www-form-urlencoded"
+  hdrIn <- (fromMaybe M.empty) <$> (sample . current $ hdrInD)
+  let headerUrlEnc = if BS.null fp then M.empty else M.insert "Content-type" "application/x-www-form-urlencoded" hdrIn
       body = ASCII.unpack fp
   return $ XhrRequest (T.unpack meth) url
             $ def { _xhrRequestConfig_headers = headerUrlEnc
