@@ -72,10 +72,15 @@ button' cls txt = do
   (e, _) <- elAttr' "button" ("class" =: cls) $ text txt
   return (_el_clicked e)
 
+clickableSpan :: MonadWidget t m => String -> Dynamic t (Map String String) -> m (Event t ())
+clickableSpan txt attrs = do
+  (e, _) <- elDynAttr' "span" attrs $ text txt
+  return (_el_clicked e)
+
 renderForest :: MonadWidget t m => Forest Text -> m (Event t Text)
 renderForest xs = do
-    evts <- mapM renderTree xs
-    return $ leftmost evts
+  evts <- mapM renderTree xs
+  return $ leftmost evts
   where
     renderTree (Node t ts) = do
       (elem, _) <- el' "li" $ text $ T.unpack t
@@ -85,9 +90,9 @@ renderForest xs = do
 
 putDebugLnE :: MonadWidget t m => Event t a -> (a -> String) -> m ()
 putDebugLnE e mkStr = do
-    performEvent_ (liftIO . putStrLn . mkStr <$> e)
+  performEvent_ (liftIO . putStrLn . mkStr <$> e)
 
 putDebugLn :: MonadWidget t m => String -> m ()
 putDebugLn str = do
-    pb <- getPostBuild
-    putDebugLnE pb (const str)
+  pb <- getPostBuild
+  putDebugLnE pb (const str)

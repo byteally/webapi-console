@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, KindSignatures, DataKinds, TypeOperators, TypeFamilies, GADTs, ScopedTypeVariables, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances, OverloadedLists, DefaultSignatures, StandaloneDeriving, StaticPointers #-}
+{-# LANGUAGE OverloadedStrings, KindSignatures, DataKinds, TypeOperators, TypeFamilies, GADTs, ScopedTypeVariables, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances, OverloadedLists, DefaultSignatures, StandaloneDeriving #-}
 {-# LANGUAGE RecursiveDo #-}
 -- |
 
@@ -88,6 +88,14 @@ type family ConsoleCtx api m r :: Constraint where
                        , RequestBody m r ~ '[]
                        , ParamErrToApiErr (ApiErr m r)
                        , SingMethod m
+                       , IsUnitVal (IsUnit (QueryParam m r))
+                       , IsUnitVal (IsUnit (PathParam m r))
+                       , IsUnitVal (IsUnit (FormParam m r))
+                       , IsUnitVal (IsUnit (HeaderIn m r))
+                       , IsUnitVal (IsUnit (FileParam m r))
+                       , IsUnitVal (IsUnit (CookieIn m r))
+                       , IsUnitVal (IsUnit (ApiOut m r))
+                       , IsUnitVal (IsUnit (ApiErr m r))
                        )
 type family AllContracts api (tys :: [*]) :: Constraint where
   AllContracts api (Route (m ': ms) r ': rs) = (ConsoleCtx api m r, AllContracts api (Route ms r ': rs))
@@ -151,7 +159,7 @@ apiConsole config api = do
         el "small" $ text "v0.1.0"
       divClass "apiconsole" $ do
         dropdownTabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $
-          \(m, r, paramWid) -> ((show (m, r)), ((show (m, r)), (void . paramWid)))
+          \(m, r, paramWid) -> ((show (m, r)), ((ASCII.unpack m <> ": " <> T.unpack r), (void . paramWid)))
     return ()
 
 getDynTyRep :: Typeable a => Proxy a -> [Text]
@@ -167,6 +175,19 @@ mkRouteTplStr (Hole : pths) []             = error "Panic: @mkRouteTplStr: not s
 mkRouteTplStr [] ["{()}"]                  = []
 mkRouteTplStr [] []                        = []
 mkRouteTplStr [] treps                     = [] --error $ "Panic: @mkRouteTplStr: more dynamic args found than the required" ++ (show treps)
+
+type family IsUnit t :: Bool where
+  IsUnit () = 'True
+  IsUnit x = 'False
+
+class IsUnitVal (b :: Bool) where
+  isUnitVal :: Proxy b -> Bool
+
+instance IsUnitVal 'True where
+  isUnitVal _ = True
+
+instance IsUnitVal 'False where
+  isUnitVal _ = False
 
 paramWidget ::  forall t m meth r api.
                ( MonadWidget t m
@@ -189,31 +210,81 @@ paramWidget ::  forall t m meth r api.
                , CookieOut meth r ~ ()
                , RequestBody meth r ~ '[]
                , ConsoleCtx api meth r
+               , IsUnitVal (IsUnit (QueryParam meth r))
+               , IsUnitVal (IsUnit (PathParam meth r))
+               , IsUnitVal (IsUnit (FormParam meth r))
+               , IsUnitVal (IsUnit (HeaderIn meth r))
+               , IsUnitVal (IsUnit (FileParam meth r))
+               , IsUnitVal (IsUnit (CookieIn meth r))
+               , IsUnitVal (IsUnit (ApiOut meth r))
+               , IsUnitVal (IsUnit (ApiErr meth r))
                ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> Event t () -> m (Event t ())
 paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
   onReq <- divClass "request-form" $ do
     let methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)
-    rec
-      divClass "request-url" $ dynText urlDyn
-      (urlDyn, encodedFormParDyn, hdrIn) <- divClass "params" $ do
-        queryWidget <- divClass "param-type-wrapper query" $ do
-          --divClass "param-type query" $ return ()
-          toWidget (Proxy :: Proxy (QueryParam meth r))
-        formWidget <- divClass "param-type-wrapper form" $ do
-          --divClass "param-type" $ text "Form Params"
-          toWidget (Proxy :: Proxy (FormParam meth r))
-        pthWidget <- divClass "param-type-wrapper path" $ do
-          --divClass "param-type" $ text "Path Params"
-          pathWidget meth r pathSegs
-        headWidget <- divClass "param-type-wrapper headers" $ do
-          --divClass "param-type" $ text "Headers"
-          toWidget (Proxy :: Proxy (HeaderIn meth r))
-        fileWidget <- divClass "param-type-wrapper files" $ do
-          --divClass "param-type" $ text "Files"
-          toWidget (Proxy :: Proxy (FileParam meth r))
-        cookWidget <- divClass "param-type-wrapper cookies" $ do
-          --divClass "param-type" $ text "Cookies"
-          toWidget (Proxy :: Proxy (CookieIn meth r))
+    (urlDyn, encodedFormParDyn, hdrIn) <- divClass "params" $ do
+      let modifyAttr [] = return []
+          modifyAttr ((x, False):xs) = do
+            cls <- sample. current $ x
+            x' <- holdDyn (M.insertWith (<>) "class" "active " cls) (updated x)
+            return $ x' : (map hideIfUnit xs)
+          modifyAttr (x:xs) = do
+            xs' <- modifyAttr xs
+            return $ hideIfUnit x : xs'
+          hideIfUnit :: (Dynamic t (Map String String), Bool) -> Dynamic t (Map String String)
+          hideIfUnit (x, False) = x
+          hideIfUnit (x, True) =
+            let cls = "class" =: "hide"
+            in constDyn cls
+          paramClass = "class" =: "tab"
+      rec attrs@[queryAttr, formAttr, pathAttr, headerAttr, fileAttr, cookieAttr] <-
+            mkSwitchableAttrs
+              [ (onQuery, paramClass)
+              , (onForm, paramClass)
+              , (onPath, paramClass)
+              , (onHeader, paramClass)
+              , (onFile, paramClass)
+              , (onCookie, paramClass)
+              ] []
+          [queryAttr', formAttr', pathAttr', headerAttr', fileAttr', cookieAttr'] <-
+            modifyAttr $ zip attrs
+              [ isUnitVal (Proxy :: Proxy (IsUnit (QueryParam meth r)))
+              , isUnitVal (Proxy :: Proxy (IsUnit (FormParam meth r)))
+              , isUnitVal (Proxy :: Proxy (IsUnit (PathParam meth r)))
+              , isUnitVal (Proxy :: Proxy (IsUnit (HeaderIn meth r)))
+              , isUnitVal (Proxy :: Proxy (IsUnit (FileParam meth r)))
+              , isUnitVal (Proxy :: Proxy (IsUnit (CookieIn meth r)))
+              ]
+          (onQuery, onForm, onPath, onHeader, onFile, onCookie) <- divClass "div-head" $ do
+            onQuery <- clickableSpan "Query Params" queryAttr'
+            onForm <- clickableSpan "Form Params" formAttr'
+            onPath <- clickableSpan "Path Params" pathAttr'
+            onHeader <- clickableSpan "HeaderIn" headerAttr'
+            onFile <- clickableSpan "File Params" fileAttr'
+            onCookie <- clickableSpan "Cookie" cookieAttr'
+            return (onQuery, onForm, onPath, onHeader, onFile, onCookie)
+      rec
+        (queryWidget, formWidget, pthWidget, headWidget, fileWidget, cookWidget) <- divClass "param-form" $ do
+          divClass "request-url" $ dynText linkDyn
+          queryWidget <- elDynAttr "div" queryAttr' $ do
+            --divClass "param-type query" $ return ()
+            toWidget (Proxy :: Proxy (QueryParam meth r))
+          formWidget <- elDynAttr "div" formAttr' $ do
+            --divClass "param-type" $ text "Form Params"
+            toWidget (Proxy :: Proxy (FormParam meth r))
+          pthWidget <- elDynAttr "div" pathAttr' $ do
+            --divClass "param-type" $ text "Path Params"
+            pathWidget meth r pathSegs
+          headWidget <- elDynAttr "div" headerAttr' $ do
+            --divClass "param-type" $ text "Headers"
+            toWidget (Proxy :: Proxy (HeaderIn meth r))
+          fileWidget <- elDynAttr "div" fileAttr' $ do
+            --divClass "param-type" $ text "Files"
+            toWidget (Proxy :: Proxy (FileParam meth r))
+          cookWidget <- elDynAttr "div" cookieAttr' $ do
+            --divClass "param-type" $ text "Cookies"
+            toWidget (Proxy :: Proxy (CookieIn meth r))
+          return (queryWidget, formWidget, pthWidget, headWidget, fileWidget, cookWidget)
         (requestDyn :: Dynamic t (Maybe (Request meth r))) <- combineDyn7 mkReq
                                                                 pthWidget
                                                                 queryWidget
@@ -227,7 +298,7 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
         linkDyn <- mapDyn ((fromMaybe "") . (fmap (\req -> show $ WebApi.link (undefined :: meth, undefined :: r) baseUrl (pathParam req) (Just $ queryParam req)))) requestDyn
         let toHdrStrs hdrs = M.fromList $ fmap (\(k, v) -> (ASCII.unpack $ original k, ASCII.unpack v)) hdrs
         hdrIn <- mapDyn (fmap (toHdrStrs . toHeader . headerIn)) requestDyn
-        return (linkDyn, encodedFormParDyn, hdrIn)
+      return (linkDyn, encodedFormParDyn, hdrIn)
       -- display encodedFormParDyn
     return $ tag (pull $ mkXhrReq methDyn urlDyn encodedFormParDyn hdrIn) onSubmit
   resE <- performRequestAsyncWithError onReq
@@ -246,7 +317,7 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
           let defAttr = ("class" =: "tab")
           rec (rsp, _) <- elDynAttr' "div" respAttr' $ text "Response"
               (asr, _) <- elDynAttr' "div" assrAttr $ do
-                imgAttr <- mapDyn (\x -> "class" =: (if True then "assert-pass" else "assert-fail")) assertResDyn
+                imgAttr <- mapDyn (\x -> "class" =: (if x then "assert-pass" else "assert-fail")) assertResDyn
                 elDynAttr "span" imgAttr $ return ()
                 text "Assertion"
               [respAttr, assrAttr] <- mkSwitchableAttrs [(_el_clicked rsp, defAttr), (_el_clicked asr, defAttr)] []
@@ -291,45 +362,31 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
                   elDynAttr "div" assertWidgetAttr $ do
                     toWidget (Proxy :: Proxy Text)
               return (statusAssert, statusMsgAssert)
-            (apiOutAssert :: Dynamic t (Predicate (ApiOut meth r))) <- divClass "api-out-assert" $ do
+            let hideIfUnit defCls x = if isUnitVal x then "display-none" else defCls
+                apiOutCls = hideIfUnit "api-out-assert" (Proxy :: Proxy (IsUnit (ApiOut meth r)))
+                apiErrCls = hideIfUnit "api-err-assert" (Proxy :: Proxy (IsUnit (ApiErr meth r)))
+                headerOutCls = hideIfUnit "header-out-assert" (Proxy :: Proxy (IsUnit (HeaderOut meth r)))
+                cookieOutCls = hideIfUnit "cookie-out-assert" (Proxy :: Proxy (IsUnit (CookieOut meth r)))
+            (apiOutAssert :: Dynamic t (Predicate (ApiOut meth r))) <- divClass apiOutCls $ do
               divClass "title-text inline-block" $ text "Api Out"
-              (gAddEvtEl, _) <- elAttr' "span" ("class" =: "plus-button") $ text "+"
-              let gAddEvt = _el_clicked gAddEvtEl
-                  displayNone = ("style" =: "display:none")
-              rec let onModalToggle = leftmost [fmap (const True) gAddEvt, fmap (const False) onModalClose, fmap (const False) onAddAssrEvt]
-                      modalClass = ("class" =: "modal-wrapper")
-                  modalAttr <- foldDyn (\x _ -> if x then modalClass else displayNone) displayNone onModalToggle
-                  (onAddAssrEvt, onModalClose) <- elDynAttr "div" modalAttr $ do
-                    divClass "assertion-modal" $ do
-                      (closeEl, _) <- divClass "modal-header" $ do
-                        divClass "title-text inline-block" $ text "Add Assertion"
-                        elAttr' "span" ("class" =: "close-modal") $ text "x"
-                      divClass "modal-body" $ do
-                        let selNameMap = fromList $ map (\x -> ("." <> x, T.unpack x)) $ concat $ map flatten $ selectorNames (Proxy :: Proxy (ApiOut meth r)) []
-                        rec dd <- dropdown "" (constDyn selNameMap) $ def
-                                  & attributes .~ constDyn ("class" =: "modal-field-select")
-                                  & setValue .~ (fmap ("." <>) onNodeSelect)
-                            onAddAssr <- button' "modal-add" "Add +"
-                            onNodeSelect <- elClass "ul" "field-selection-tree" $
-                              renderForest $ selectorNames (Proxy :: Proxy (ApiOut meth r)) []
-                        return $ (tag (pull (sample . current $ _dropdown_value dd)) onAddAssr, _el_clicked closeEl)
+              onAddAssrEvt <- addFieldModal (Proxy :: Proxy (ApiOut meth r))
               --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiOut meth r) ()))
               assertWidget (Proxy :: Proxy (ApiOut meth r)) (GAssertState "" onAddAssrEvt)
-            (apiErrAssert :: Dynamic t (Predicate (ApiErr meth r))) <- divClass "api-err-assert" $ do
+            (apiErrAssert :: Dynamic t (Predicate (ApiErr meth r))) <- divClass apiErrCls $ do
               divClass "title-text inline-block" $ text "Api Err"
-              gAddEvt <- addFieldModal (Proxy :: Proxy (ApiErr meth r))
+              onAddAssrEvt <- addFieldModal (Proxy :: Proxy (ApiErr meth r))
               --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiErr meth r) ()))
-              assertWidget (Proxy :: Proxy (ApiErr meth r)) (GAssertState "" (fmap (const "") gAddEvt))
-            (headerOutAssert :: Dynamic t (Predicate (HeaderOut meth r))) <- divClass "header-out-assert" $ do
+              assertWidget (Proxy :: Proxy (ApiErr meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt))
+            (headerOutAssert :: Dynamic t (Predicate (HeaderOut meth r))) <- divClass headerOutCls $ do
               divClass "title-text inline-block" $ text "Header Out"
-              gAddEvt <- addFieldModal (Proxy :: Proxy (HeaderOut meth r))
+              onAddAssrEvt <- addFieldModal (Proxy :: Proxy (HeaderOut meth r))
               --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (HeaderOut meth r) ()))
-              assertWidget (Proxy :: Proxy (HeaderOut meth r)) (GAssertState "" (fmap (const "") gAddEvt))
-            (cookieOutAssert :: Dynamic t (Predicate (CookieOut meth r))) <- divClass "cookie-out-assert" $ do
+              assertWidget (Proxy :: Proxy (HeaderOut meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt))
+            (cookieOutAssert :: Dynamic t (Predicate (CookieOut meth r))) <- divClass cookieOutCls $ do
               divClass "title-text inline-block" $ text "Cookie Out"
-              gAddEvt <- addFieldModal (Proxy :: Proxy (CookieOut meth r))
+              onAddAssrEvt <- addFieldModal (Proxy :: Proxy (CookieOut meth r))
               --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (CookieOut meth r) ()))
-              assertWidget (Proxy :: Proxy (CookieOut meth r)) (GAssertState "" (fmap (const "") gAddEvt))
+              assertWidget (Proxy :: Proxy (CookieOut meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt))
             let combDyn (statusVal, outPred, errPred, hdrPred, cookPred) (Success st out hdr cook) =
                   let outRes   = (getPredicate outPred) out
                       hdrRes   = (getPredicate hdrPred) hdr
@@ -376,7 +433,7 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
                     onNodeSelect <- elClass "ul" "field-selection-tree" $
                       renderForest $ selectorNames prxy []
                 return $ (tag (pull (sample . current $ _dropdown_value dd)) onAddAssr, _el_clicked closeEl)
-      return gAddEvt
+      return onAddAssrEvt
 
 -- TODO: Dup from WebApi package
 mkResponse :: forall m r.( Decodings (ContentTypes m r) (ApiOut m r)
