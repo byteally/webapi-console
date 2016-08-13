@@ -1,7 +1,10 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Reflex.Utils where
+module Reflex.Utils
+       ( module Reflex.Utils
+       , module Reflex.Utils.Dynamic
+       ) where
 
 import Data.Maybe
 import Reflex.Dom
@@ -13,6 +16,7 @@ import Control.Monad
 import Control.Lens (imapM)
 import Data.Map as Map hiding (map, fst)
 import Control.Monad.IO.Class (liftIO)
+import Reflex.Utils.Dynamic
 
 mkSwitchableAttrs :: MonadWidget t m
                   => [(Event t a, Map String String)]

@@ -23,11 +23,15 @@ library
   hs-source-dirs:      src
   ghc-options:         -Wall
   exposed-modules:     WebApi.Console
-                     , WebApi.PageTemplate
+                       WebApi.PageTemplate
+                       WebApi.Console.TH
   other-modules:       Reflex.Utils
+                       Reflex.Utils.Dynamic
+                       WebApi.Console.Function
   build-depends:       base >= 4.7 && < 5
                      , ghcjs-base
                      , ghcjs-prim
+                     , template-haskell
                      , reflex       == 0.4.*
                      , reflex-dom   == 0.3.*
                      , ghcjs-dom    == 0.2.*
@@ -45,6 +49,7 @@ library
                      , lens         == 4.13.*
                      , rank1dynamic == 0.3.*
                      , unordered-containers == 0.2.*
+                     , hashable      >= 1.2
                      , contravariant == 1.4.*
                      , aeson-pretty  == 0.7.*
                      , time          >= 1.5 && <= 1.7

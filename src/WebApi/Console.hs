@@ -1,11 +1,16 @@
-{-# LANGUAGE OverloadedStrings, KindSignatures, DataKinds, TypeOperators, TypeFamilies, GADTs, ScopedTypeVariables, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances, OverloadedLists, DefaultSignatures, StandaloneDeriving #-}
+{-# LANGUAGE OverloadedStrings, KindSignatures, DataKinds, TypeOperators, TypeFamilies, GADTs, ScopedTypeVariables, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, UndecidableInstances, OverloadedLists, DefaultSignatures, StandaloneDeriving, StaticPointers, DeriveGeneric, TemplateHaskell #-}
 {-# LANGUAGE RecursiveDo #-}
 -- |
 
-module WebApi.Console where
+module WebApi.Console
+       (
+         module WebApi.Console
+--       , module WebApi.Console.TH
+       ) where
 
 import Data.JSString ()
 import qualified Data.Map as M
+import qualified Data.Map.Lazy as LM
 import Data.Maybe
 import Data.Tree
 import GHCJS.Types
@@ -31,12 +36,14 @@ import           Network.HTTP.Media                    (mapContentMedia)
 import Network.HTTP.Types
 import Network.HTTP.Types.URI
 import Network.URI
+import Control.Arrow ((&&&))
 import Control.Monad
 import Control.Monad.IO.Class
 import GHC.Generics
 import WebApi.Client
 import WebApi.Internal (getContentType)
 import WebApi.PageTemplate
+--import WebApi.Console.TH
 --import WebApi.Assertion hiding (ToWidget)
 import Data.Map (Map)
 import Debug.Trace
@@ -46,9 +53,12 @@ import Data.Monoid ((<>))
 import Data.Functor.Contravariant
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
+import Data.Hashable
 import qualified Data.Rank1Dynamic as R1D (Dynamic)
 import Data.Rank1Dynamic hiding (Dynamic)
 import Data.Rank1Typeable hiding (V1)
+import Language.Haskell.TH
+import Language.Haskell.TH.Syntax
 import Control.Exception
 import Data.Either
 import Data.Aeson.Encode.Pretty
@@ -129,8 +139,13 @@ instance SingRoutes api '[] where
 
 data ConsoleConfig = ConsoleConfig
   { baseURI :: URI
-  } deriving (Show, Eq)
+  , functions :: ConsoleFunctions
+  } deriving (Show)
 
+data ConsoleFunctions = ConsoleFunctions
+  { assertFunctions :: PrjMap
+  } deriving (Show)
+  
 apiConsole :: forall api apis routes.
              ( WebApi api
              , apis ~ Apis api
@@ -146,7 +161,7 @@ apiConsole config api = do
               pathSegs = mkPathFormatString pxyR
           in ( singMethod pxyM
              , routeTpl
-             , (\x -> paramWidget api pxyM pxyR (baseURI config) pathSegs x)
+             , (\x -> paramWidget api pxyM pxyR (baseURI config) (functions config) pathSegs x)
              ) : (getPathSegs rs)
       getPathSegs RouteNil           = []
       routeSegs = getPathSegs routes
@@ -218,8 +233,8 @@ paramWidget ::  forall t m meth r api.
                , IsUnitVal (IsUnit (CookieIn meth r))
                , IsUnitVal (IsUnit (ApiOut meth r))
                , IsUnitVal (IsUnit (ApiErr meth r))
-               ) => Proxy api -> Proxy meth -> Proxy r -> URI -> [PathSegment] -> Event t () -> m (Event t ())
-paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
+               ) => Proxy api -> Proxy meth -> Proxy r -> URI -> ConsoleFunctions -> [PathSegment] -> Event t () -> m (Event t ())
+paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper" $ do
   onReq <- divClass "request-form" $ do
     let methDyn = constDyn $ decodeUtf8 $ singMethod (Proxy :: Proxy meth)
     (urlDyn, encodedFormParDyn, hdrIn) <- divClass "params" $ do
@@ -371,22 +386,22 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
               divClass "title-text inline-block" $ text "Api Out"
               onAddAssrEvt <- addFieldModal (Proxy :: Proxy (ApiOut meth r))
               --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiOut meth r) ()))
-              assertWidget (Proxy :: Proxy (ApiOut meth r)) (GAssertState "" onAddAssrEvt)
+              assertWidget (Proxy :: Proxy (ApiOut meth r)) (GAssertState "" onAddAssrEvt conFuns)
             (apiErrAssert :: Dynamic t (Predicate (ApiErr meth r))) <- divClass apiErrCls $ do
               divClass "title-text inline-block" $ text "Api Err"
               onAddAssrEvt <- addFieldModal (Proxy :: Proxy (ApiErr meth r))
               --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (ApiErr meth r) ()))
-              assertWidget (Proxy :: Proxy (ApiErr meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt))
+              assertWidget (Proxy :: Proxy (ApiErr meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt) conFuns)
             (headerOutAssert :: Dynamic t (Predicate (HeaderOut meth r))) <- divClass headerOutCls $ do
               divClass "title-text inline-block" $ text "Header Out"
               onAddAssrEvt <- addFieldModal (Proxy :: Proxy (HeaderOut meth r))
               --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (HeaderOut meth r) ()))
-              assertWidget (Proxy :: Proxy (HeaderOut meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt))
+              assertWidget (Proxy :: Proxy (HeaderOut meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt) conFuns)
             (cookieOutAssert :: Dynamic t (Predicate (CookieOut meth r))) <- divClass cookieOutCls $ do
               divClass "title-text inline-block" $ text "Cookie Out"
               onAddAssrEvt <- addFieldModal (Proxy :: Proxy (CookieOut meth r))
               --mapDyn (contramap from) =<< gAssert (Proxy :: Proxy (Rep (CookieOut meth r) ()))
-              assertWidget (Proxy :: Proxy (CookieOut meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt))
+              assertWidget (Proxy :: Proxy (CookieOut meth r)) (GAssertState "" (fmap (const "") onAddAssrEvt) conFuns)
             let combDyn (statusVal, outPred, errPred, hdrPred, cookPred) (Success st out hdr cook) =
                   let outRes   = (getPredicate outPred) out
                       hdrRes   = (getPredicate hdrPred) hdr
@@ -402,6 +417,7 @@ paramWidget api meth r baseUrl pathSegs onSubmit = divClass "box-wrapper" $ do
                 combDyn _ (Failure (Right _ex)) = False
             preds <- combineDyn5 (,,,,) statusAssert apiOutAssert apiErrAssert headerOutAssert cookieOutAssert
             holdDyn True (attachDynWith combDyn preds response)
+        display assertResDyn
     return ()
   return $ tag (constant ()) onReq
   where
@@ -828,6 +844,7 @@ instance (SelectorName a) => SelectorName (Maybe a) where
 data GAssertState t = GAssertState
   { fieldNameAcc :: Text
   , globalAddEvent :: Event t Text
+  , as_conFuns :: ConsoleFunctions
   }
 
 class GAssert f where
@@ -865,7 +882,7 @@ instance (GAssert f, Typeable f, Constructor c) => GAssert (C1 c f) where
           divClass "field" $ mapDyn (contramap unM1) =<< gAssert Proxy gs
 
 instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, AssertWidget f1) => GAssert (S1 s f) where
-  gAssert _ (GAssertState fname gAddEvt) = do
+  gAssert _ (GAssertState fname gAddEvt conFuns) = do
     let fldName = fname <> "." <> T.pack sName
         sName = selName (undefined :: S1 s f ())
     (onFieldShow, onFieldAdd) <- headTailE $ push (ifFieldIs fldName) gAddEvt
@@ -875,6 +892,7 @@ instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, Assert
     p2 <- createAssertWidget onFieldPrefix
     combineDyn (\a b -> Predicate $ \prd -> ((getPredicate a) prd) && ((getPredicate b) prd)) p1 p2
     where
+      funTable' = assertFunctions conFuns
       showWidgetOn = foldDyn (\x -> const M.empty) ("style" =: "display:none")
       toggleWidgetOn showEvt hideEvt = foldDyn (\x _ -> if x then M.empty else ("style" =: "display:none")) ("style" =: "display:none") $ leftmost [fmap (const True) showEvt, fmap (const False) hideEvt]
       ifFieldHas x y = if T.isPrefixOf x y && x /= y then return (Just ()) else return Nothing
@@ -908,15 +926,16 @@ instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, Assert
             & attributes .~ constDyn ("class" =: "assert-field-select")
           (removeEl, _) <- elAttr' "span" ("class" =: "assert-remove") $ text "-"
           dyn <- divClass "field-assertion" $ do
-            let defKey = "-- No Selection --" :: Text
+            let defKey = defAssertFnKey
                 disabledWidgetAttr = ("class" =: "disabled-assert assert-widget")
                 enabledWidgetAttr = ("class" =: "assert-widget")
                 fldname = fname <> "." <> T.pack sName
-            dd <- dropdown defKey (constDyn ("==" =: "==")) def
+                dropDownKV (n, fnInfo) = (n, displayName fnInfo)
+            dd <- dropdown defKey (constDyn (LM.fromList $ fmap dropDownKV $ HM.toList funTable' )) def
             assertWidgetAttr <- holdDyn disabledWidgetAttr $ fmap (\x -> if x == defKey
                                                                           then disabledWidgetAttr
                                                                           else enabledWidgetAttr) $ _dropdown_change dd
-            let lookupPredFn fnKey = maybe (error "Unknown Fn1") prjFnDyn $ HM.lookup fnKey funTable
+            let lookupPredFn fnKey = maybe (error "Unknown Fn1") prjFnDyn $ HM.lookup fnKey funTable'
             let succeed _ _ = True
             fnDyn <- holdDyn (toDynamic (succeed :: ANY -> ANY -> Bool)) ((lookupPredFn) <$>_dropdown_change dd)
             elDynAttr "div" assertWidgetAttr $ do
@@ -935,7 +954,7 @@ instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, Assert
               --elAttr "label" ("class" =: "label") $ text $ selName (undefined :: S1 s f ())
               dyn <- divClass "field-assertion" $ do
                 el "div" $ do
-                  mapDyn (contramap unM1 . contramap unK1) =<< assertWidget (Proxy :: Proxy f1) (GAssertState (fname <> "." <> T.pack sName) gAddEvt)
+                  mapDyn (contramap unM1 . contramap unK1) =<< assertWidget (Proxy :: Proxy f1) (GAssertState (fname <> "." <> T.pack sName) gAddEvt conFuns)
               return (dyn, _el_clicked removeEl)
         return predDyn
       mkPred :: R1D.Dynamic -> Maybe f1 -> Predicate f1
@@ -945,7 +964,7 @@ instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, Assert
         res  <- pred `dynApply` (toDynamic w)
         fromDynamic res
       unsafeRight (Right a) = a
-      unsafeRight _         = error "Expecting only right"
+      unsafeRight (Left e)  = error $ "Expecting only right, but got: " ++ (show e)
 
 instance (ToWidget f, Typeable f, AssertWidget f) => GAssert (K1 c f) where
   {-gAssert _ gs@(GAssertState fname gAddEvt) = do
@@ -1006,20 +1025,39 @@ data PrjFnInfo = PrjFnInfo
   , prjResWidget :: WidgetBox
   , prjFnModName :: String
   , prjFnPkgKey  :: String
+  , displayName  :: String
   } deriving (Show)
 
-type PrjMap = HashMap Text PrjFnInfo
+type PrjMap = HashMap GName PrjFnInfo
 
 data PrjVal = forall v.(Typeable v, ToWidget v) => Val v
             | ProjectedVal (R1D.Dynamic, PrjFnInfo) PrjVal
 
+data GName = GName
+  { pkgName  :: !String
+  , modName  :: !String
+  , fnName   :: !String
+  } deriving (Show, Read, Eq, Ord, Generic)
+
+instance Hashable GName
+
+instance Lift GName where
+  lift (GName p m f) = (conE 'GName) `appE` lift p `appE` lift m `appE` lift f
+
+-- (, PrjFnInfo (toDynamic (length :: [ANY] -> Int)) (WidgetBox (Proxy :: Proxy Int)) "Data.List" "base" Nothing)
+
 funTable :: PrjMap
 funTable = HM.fromList
-  [ ("Data.List.length", PrjFnInfo (toDynamic (length :: [ANY] -> Int)) (WidgetBox (Proxy :: Proxy Int)) "Data.List" "base")
-  , ("==", PrjFnInfo (toDynamic ((==) :: Int -> Int -> Bool)) (WidgetBox (Proxy :: Proxy Bool)) "GHC.Classes" "base")
+  [ (GName "GHC.Classes" "base" "==", PrjFnInfo (toDynamic ((==) :: Int -> Int -> Bool)) (WidgetBox (Proxy :: Proxy Bool)) "GHC.Classes" "base" "Equals")
+  , (GName "GHC.Classes" "base" "/=", PrjFnInfo (toDynamic ((/=) :: Int -> Int -> Bool)) (WidgetBox (Proxy :: Proxy Bool)) "GHC.Classes" "base" "NotEquals")
   ]
 
-apply :: Text -> PrjVal -> Either String PrjVal
+
+defAssertFnKey :: GName
+defAssertFnKey = GName "GHC.Classes" "base" "=="
+
+
+apply :: GName -> PrjVal -> Either String PrjVal
 apply fnKey val@(Val v) = do
   prjFnInf <- maybe (Left "Unknown Fn") Right $ HM.lookup fnKey funTable
   prjRes <- (prjFnDyn prjFnInf) `dynApply` (toDynamic v)
@@ -1034,44 +1072,7 @@ unapply v@(Val _) = v
 unapply (ProjectedVal _ nextVal) = nextVal
 
 
-combineDyn3 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> m (Dynamic t d)
-combineDyn3 f da db dc = (combineDyn (\c (a, b) -> f a b c) dc) =<< (combineDyn (,) da db)
 
-combineDyn4 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d -> e) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> (Dynamic t d) -> m (Dynamic t e)
-combineDyn4 f da db dc dd = (combineDyn (\d (a, b, c) -> f a b c d) dd) =<< (combineDyn3 (,,) da db dc)
-
-combineDyn5 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d -> e -> f) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> (Dynamic t d) -> Dynamic t e -> m (Dynamic t f)
-combineDyn5 f da db dc dd de = (combineDyn (\e (a, b, c, d) -> f a b c d e) de) =<< (combineDyn4 (,,,) da db dc dd)
-
-combineDyn6 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d -> e -> f -> g) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> (Dynamic t d) -> Dynamic t e -> Dynamic t f -> m (Dynamic t g)
-combineDyn6 fn da db dc dd de df = (combineDyn (\f (a, b, c, d, e) -> fn a b c d e f) df) =<< (combineDyn5 (,,,,) da db dc dd de)
-
-combineDyn7 :: (Reflex t, MonadHold t m) => (a -> b -> c -> d -> e -> f -> g -> h) -> Dynamic t a -> Dynamic t b -> Dynamic t c -> (Dynamic t d) -> Dynamic t e -> Dynamic t f -> Dynamic t g -> m (Dynamic t h)
-combineDyn7 fn da db dc dd de df dg = (combineDyn (\g (a, b, c, d, e, f) -> fn a b c d e f g) dg) =<< (combineDyn6 (,,,,,) da db dc dd de df)
-
-combineDyn8 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> m (Dynamic t a9)
-combineDyn8 fn a1 a2 a3 a4 a5 a6 a7 a8 = (combineDyn (\a8' (a1', a2', a3', a4', a5', a6', a7') -> fn a1' a2' a3' a4' a5' a6' a7' a8') a8) =<< (combineDyn7 (,,,,,,) a1 a2 a3 a4 a5 a6 a7)
-
-combineDyn9 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> m (Dynamic t a10)
-combineDyn9 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 = (combineDyn (\a9' (a1', a2', a3', a4', a5', a6', a7', a8') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9') a9) =<< (combineDyn8 (,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8)
-
-combineDyn10 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> m (Dynamic t a11)
-combineDyn10 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 = (combineDyn (\a10' (a1', a2', a3', a4', a5', a6', a7', a8', a9') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10') a10) =<< (combineDyn9 (,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9)
-
-combineDyn11 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> m (Dynamic t a12)
-combineDyn11 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 = (combineDyn (\a11' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11') a11) =<< (combineDyn10 (,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10)
-
-combineDyn12 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12 -> a13) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> Dynamic t a12 -> m (Dynamic t a13)
-combineDyn12 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 = (combineDyn (\a12' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10', a11') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11' a12') a12) =<< (combineDyn11 (,,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11)
-
-combineDyn13 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12 -> a13 -> a14) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> Dynamic t a12 -> Dynamic t a13 -> m (Dynamic t a14)
-combineDyn13 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 = (combineDyn (\a13' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10', a11', a12') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11' a12' a13') a13) =<< (combineDyn12 (,,,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12)
-
-combineDyn14 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12 -> a13 -> a14 -> a15) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> Dynamic t a12 -> Dynamic t a13 -> Dynamic t a14 -> m (Dynamic t a15)
-combineDyn14 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 = (combineDyn (\a14' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10', a11', a12', a13') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11' a12' a13' a14') a14) =<< (combineDyn13 (,,,,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13)
-
-combineDyn15 :: (Reflex t, MonadHold t m) => (a1 -> a2 -> a3 -> a4 -> a5 -> a6 -> a7 -> a8 -> a9 -> a10 -> a11 -> a12 -> a13 -> a14 -> a15 -> a16) -> Dynamic t a1 -> Dynamic t a2 -> Dynamic t a3 -> Dynamic t a4 -> Dynamic t a5 -> Dynamic t a6 -> Dynamic t a7 -> Dynamic t a8 -> Dynamic t a9 -> Dynamic t a10 -> Dynamic t a11 -> Dynamic t a12 -> Dynamic t a13 -> Dynamic t a14 -> Dynamic t a15 -> m (Dynamic t a16)
-combineDyn15 fn a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 = (combineDyn (\a15' (a1', a2', a3', a4', a5', a6', a7', a8', a9', a10', a11', a12', a13', a14') -> fn a1' a2' a3' a4' a5' a6' a7' a8' a9' a10' a11' a12' a13' a14' a15') a15) =<< (combineDyn14 (,,,,,,,,,,,,,) a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14)
 
 emptyParamWidget ::  MonadWidget t m => m (Dynamic t (Maybe ()))
 emptyParamWidget = return $ constDyn $ Just ()
@@ -1091,7 +1092,7 @@ mkXhrReq methD urlD fpD hdrInD = do
   url  <- sample . current $ urlD
   fp   <- sample . current $ fpD
   hdrIn <- (fromMaybe M.empty) <$> (sample . current $ hdrInD)
-  let headerUrlEnc = if BS.null fp then M.empty else M.insert "Content-type" "application/x-www-form-urlencoded" hdrIn
+  let headerUrlEnc = if BS.null fp then hdrIn else M.insert "Content-type" "application/x-www-form-urlencoded" hdrIn
       body = ASCII.unpack fp
   return $ XhrRequest (T.unpack meth) url
             $ def { _xhrRequestConfig_headers = headerUrlEnc
