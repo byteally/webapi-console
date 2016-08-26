@@ -31,11 +31,15 @@ data UserQuery = UserQuery
 
 data User = User
   { userId :: Int
-  , userName :: [Text]
+  , userName :: [Locations]
   , userAge :: Int
   , userType :: UserType
   , userQuery :: UserQuery
   , location :: LatLng
+  } deriving (Show, Eq, Generic, ToJSON, FromJSON)
+
+data Locations = Locations
+  { locations :: [LatLng]
   } deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
 data LatLng = LatLng
@@ -43,7 +47,7 @@ data LatLng = LatLng
   , lng :: Int
   } deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
-data UserType = Nobody Int | Normal Int | Admin Int
+data UserType = Nobody {nbId :: Int} | Normal {normalId :: Int} | Admin {adminId :: Int}
   deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
 instance ToParam UserType 'QueryParam
@@ -51,6 +55,8 @@ instance ToParam LatLng 'QueryParam
 
 instance ToParam UserQuery 'QueryParam
 instance ToParam User 'QueryParam
+
+instance ToParam Locations 'QueryParam
 
 instance ApiContract TestApp GET UserR where
   type QueryParam GET UserR = UserQuery
@@ -62,16 +68,19 @@ instance ApiContract TestApp GET ProfileR where
 
 instance ToWidget UserType
 instance AssertWidget UserType
-instance SelectorName UserType
+instance SelectorInfo UserType
 instance ToWidget UserQuery
 instance AssertWidget UserQuery
-instance SelectorName UserQuery
+instance SelectorInfo UserQuery
 instance ToWidget User
 instance AssertWidget User
-instance SelectorName User
+instance SelectorInfo User
 instance ToWidget LatLng
 instance AssertWidget LatLng
-instance SelectorName LatLng
+instance SelectorInfo LatLng
+instance ToWidget Locations
+instance AssertWidget Locations
+instance SelectorInfo Locations
 
 consoleApp :: IO ()
 -- consoleApp = apiConsole (ConsoleConfig (URI "http:" (Just (URIAuth "" "localhost" ":9000")) "" "" "") $(functions [('(&&), Just "And")]) ) (Proxy :: Proxy TestApp)

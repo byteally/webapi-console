@@ -81,17 +81,6 @@ clickableSpan txt attrs = do
   (e, _) <- elDynAttr' "span" attrs $ text txt
   return (_el_clicked e)
 
-renderForest :: MonadWidget t m => Forest Text -> m (Event t Text)
-renderForest xs = do
-  evts <- mapM renderTree xs
-  return $ leftmost evts
-  where
-    renderTree (Node t ts) = do
-      (elem, _) <- el' "li" $ text $ T.unpack t
-      el "ul" $ do
-        evt <- el "li" $ renderForest ts
-        return $ leftmost [fmap (const t) (domEvent Click elem), evt]
-
 putDebugLnE :: MonadWidget t m => Event t a -> (a -> String) -> m ()
 putDebugLnE e mkStr = do
   performEvent_ (liftIO . putStrLn . mkStr <$> e)
