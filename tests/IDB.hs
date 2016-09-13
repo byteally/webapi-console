@@ -28,7 +28,7 @@ import qualified GHCJS.DOM.JSFFI.Window as FFIWin
 import qualified GHCJS.DOM.Types as DOM
 import GHCJS.DOM.EventM
 import Control.Monad
-import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Class (lift, MonadTrans)
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Reader
 import Control.Monad.IO.Class
@@ -97,10 +97,10 @@ indexedDB idbReq upgrade' = do
           mt <- readRef eUpgradeTriggerRef
           forM_ mt $ \t -> runWithActions [t :=> Identity res]
           return ()
-      onSuccess :: IO ()
-      onSuccess = postGui $ do
+      onSuccess :: IndexedDBState -> IO ()
+      onSuccess idbSt = postGui $ do
         mt <- readRef eOpenTriggerRef
-        forM_ mt $ \t -> runWithActions [t :=> Identity True]
+        forM_ mt $ \t -> runWithActions [t :=> Identity idbSt]
         return ()
       onError :: IO ()
       onError = do
@@ -117,9 +117,8 @@ indexedDB idbReq upgrade' = do
       let idbReq = maybe (error "Error getting idb request") id tgt :: IDBReq.IDBRequest
       idbAny <- liftIO $ IDBReq.getResult idbReq
       let idb = maybe (error "Error getting idb") IDBD.castToIDBDatabase idbAny
---      let idbState = Open idb
       liftIO $ writeIORef idbRef (Just idb)
-      liftIO onSuccess
+      liftIO (onSuccess .  Open . IDBRef =<< newIORef idb)
     _ <- liftIO $ on idbOpenReq IDBReq.error $ liftIO onError
     _ <- liftIO $ on idbOpenReq IDBOReq.upgradeNeeded $ do
       tgt <- target
@@ -136,12 +135,14 @@ indexedDB idbReq upgrade' = do
     case idbM of
       Just idb -> do
         IDBD.close idb
+        liftIO $ print "Closing........."
         liftIO $ modifyIORef idbRef (const Nothing)
-        let idbState = Close
-        return False
-      Nothing -> return False
-  let isOpenE = mergeWith (&&) [eOpen, closeE]
-  idbState <- holdDyn Close never
+        return Close
+      Nothing -> return Close
+  let mergedStatus = leftmost [closeE, eOpen]
+      isClosedE    = fmap isClosed mergedStatus    
+      isOpenE      = fmap not isClosedE
+  idbState <- holdDyn Close mergedStatus
   return $ case res of
     Left e -> Left (T.pack e)
     Right _ -> Right $ IndexedDB isOpenE idbState eUpgrade
@@ -156,6 +157,10 @@ indexedDB idbReq upgrade' = do
           IDBD.deleteObjectStore idb storeN
           f
 
+
+isClosed :: IndexedDBState -> Bool
+isClosed Close = True
+isClosed _     = False
 
 data IndexedDBOpen t = IndexedDBOpen
   { _idb_name    :: Text
@@ -177,6 +182,7 @@ data IndexedDB t = forall item.IndexedDB
 
 data TransactionMode = ReadWrite
                      | ReadOnly
+                     | ReadWriteFlush
                      | VersionChange
                      deriving (Show, Read)
                               
@@ -284,34 +290,32 @@ newtype Cursor t s m a = Cursor { runCursor :: FreeT (CursorOp t Item) (ExceptT 
                                 , MonadIO
                                 )
 
-newtype IDB t m a = IDB { runIDB :: FreeT (StoreOp t Item m) (ExceptT IDBError m) a}
+newtype IDB t r m a = IDB { runIDB :: FreeT (StoreOp t Item m) (ExceptT IDBError (ReaderT r m)) a}
                   deriving ( Functor
                            , Applicative
                            , Monad
                            , MonadIO
                            )
 
-data IDBTransact t m a = IDBTransact (Event t ()) (IDB t m a)
-
-openStore :: (Monad m) => Text -> IDB t m (ObjectStore t)
+openStore :: (Monad m) => Text -> IDB t r m (ObjectStore t)
 openStore store = IDB $ liftF $ OpOpenStore store id
 
-add :: (Monad m) => (ObjectStore t) -> Item -> Maybe Text -> IDB t m ()
+add :: (Monad m) => (ObjectStore t) -> Item -> Maybe Text -> IDB t r m ()
 add store item key = IDB $ liftF $ OpAdd store item key ()
 
-clear :: (Monad m) => (ObjectStore t) -> IDB t m ()
+clear :: (Monad m) => (ObjectStore t) -> IDB t r m ()
 clear store = IDB $ liftF $ OpClear store ()
 
-count :: (Monad m) => (ObjectStore t) -> Maybe KeyOrKeyRange -> IDB t m (Either IDBError Int)
+count :: (Monad m) => (ObjectStore t) -> Maybe KeyOrKeyRange -> IDB t r m (Either IDBError Int)
 count store key = IDB $ liftF $ OpCount store key id
 
-get :: (Monad m) => (ObjectStore t) -> Text -> IDB t m (Either IDBError (Maybe Text))
+get :: (Monad m) => (ObjectStore t) -> Text -> IDB t r m (Either IDBError (Maybe Text))
 get store key = IDB $ liftF $ OpGet store key id
 
-getAll :: (Monad m) => (ObjectStore t) -> Maybe KeyOrKeyRange -> Maybe Int -> IDB t m (Either IDBError [Text])
+getAll :: (Monad m) => (ObjectStore t) -> Maybe KeyOrKeyRange -> Maybe Int -> IDB t r m (Either IDBError [Text])
 getAll store key count = IDB $ liftF $ OpGetAll store key count id
 
-openCursor :: (Monad m) => (ObjectStore t) -> Maybe KeyOrKeyRange -> (Maybe CursorMove) -> () -> (Cursor t St m ()) -> IDB t m ()
+openCursor :: (Monad m) => (ObjectStore t) -> Maybe KeyOrKeyRange -> (Maybe CursorMove) -> () -> (Cursor t St m ()) -> IDB t r m ()
 openCursor store key dir initState curCode = IDB $ liftF $ OpCursor store key dir initState curCode ()
 
 data TransactionConfig t a = TransactionConfig
@@ -328,12 +332,16 @@ runTransaction :: forall t m input output.
   ( MonadIO m
   , MonadSample t m
   , MonadWidget t m
-  , input ~ ()
-  ) => IndexedDB t -> TransactionConfig t input -> (forall t1. (Reflex t1) => IDB t1 (WidgetHost m) output) -> m (Event t (Either IDBError output))
+--  , input ~ ()
+  ) => IndexedDB t -> TransactionConfig t input -> (forall t1. (Reflex t1) => IDB t1 input (WidgetHost m) output) -> m (Event t (Either IDBError output))
 runTransaction idb transCfg transact = do
   let trigger = _transCfg_trigger transCfg
-      fixT = const :: IDB t m1 o -> Event t a -> IDB t m1 o
+      fixT = const :: IDB t input m1 o -> Event t a -> IDB t input m1 o
       code = transact `fixT` trigger
+      scopes = case _transCfg_scopes transCfg of
+        (s : _) -> s
+        []      -> error $ "Atleast one trasanction scopes are required"
+      transMode = showTransactionMode $ _transCfg_mode transCfg
   performEvent $ ffor trigger $ \input -> do
     idbState <- sample $ current $ _idb_state idb
     case idbState of
@@ -341,17 +349,18 @@ runTransaction idb transCfg transact = do
       Open idbRef' -> do
         let idbRef = runIDBRef idbRef'
         idb <- liftIO $ readIORef idbRef
-        transM <- IDBD.transaction idb "<storesname>" "<mode>"
+        transM <- IDBD.transaction idb scopes transMode
         case transM of
           Nothing -> return $ Left $ T.pack "Unable to create transaction"
-          Just trans -> runExceptT $ iterT (interpret input trans) $ runIDB code
+          Just trans -> runReaderT (runExceptT $ iterT (interpret input trans) $ runIDB code) input
   where
     interpret input idbTrans (OpOpenStore storeN f) = do
-      objStore <- IDBTrans.objectStore idbTrans "<storename>" !? (nullErr "objectStore" [])
+      objStore <- IDBTrans.objectStore idbTrans storeN !? (nullErr "objectStore" [])
       f $ ObjectStore objStore
     interpret input idbTrans (OpAdd (ObjectStore store) item key f) = do
       itemVal <- liftIO $ toJSVal item
       keyVal <- liftIO $ toJSVal key
+      liftIO $ print $ "adding " ++ (show key)
       req <- IDBStore.add store itemVal keyVal !? (nullErr "add" [])
       f
 
@@ -454,11 +463,20 @@ runTransaction idb transCfg transact = do
     interpretCursor curs (OpContinue f) = do
       f
 
+getInput :: Monad m => IDB t r m r
+getInput = IDB ((lift . lift) ask)
+
 showCursorMove :: CursorMove -> String
 showCursorMove Next       = "next"
 showCursorMove NextUnique = "nextunique"
 showCursorMove Prev       = "prev"
 showCursorMove PrevUnique = "prevunique"
+
+showTransactionMode :: TransactionMode -> String
+showTransactionMode ReadWrite = "readwrite"
+showTransactionMode ReadWriteFlush  = "readwriteflush"
+showTransactionMode ReadOnly = "readonly"
+showTransactionMode VersionChange = "versionchange"
 
 testIDB :: IO ()
 testIDB = mainWidget $ do
@@ -474,14 +492,22 @@ testIDB = mainWidget $ do
 --    deleteObjectStore (T.pack "todo")
     return ()
   let idb = (unSafeRight idbE)
-  runTransaction idb (TransactionConfig [] ReadOnly closeE never) $ do
+  tres <- runTransaction idb (TransactionConfig [T.pack "todo"] ReadWrite todoAddE never) $ do
+    todoSt <- openStore (T.pack "todo")
+    inp <- getInput
+    add todoSt (T.pack "testV") (Just $ T.pack inp)
+    add todoSt (T.pack "testV") (Just $ T.pack $ inp ++ "_1")
+    liftIO $ print inp
     return ()
   dynText =<< (holdDyn "Waiting.." $ case idbE of
     Left e  -> never
     Right r -> fmap show $ _idb_isOpen r)
   dynText =<< (holdDyn "Upgarding.." $ case idbE of
     Left e  -> never
-    Right r -> fmap show $ _idb_onUpgrading r)    
+    Right r -> fmap show $ _idb_onUpgrading r)
+  dynText =<< (holdDyn "trans ..." $ ffor tres $ \tres' -> case tres' of
+                  Left e -> "Trans err: " ++ show e
+                  Right r -> "trans done")
   return ()
     where unSafeRight (Right r) = r
 
