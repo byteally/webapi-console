@@ -2,8 +2,10 @@ resolver: lts-5.15
 packages:
 - '.'
 - location:
-    git: https://github.com/byteally/webapi.git
-    commit: 571276c8801a4eb4e09b93c2a248af6e885e5ed3
+     git: https://github.com/byteally/webapi
+     commit: 23758ed06c5078f85cc41caa1e5e5dcad4ead2f8
+  subdirs:
+  - webapi
 extra-deps:
 - ghcjs-dom-0.2.3.1
 - rank1dynamic-0.3.2.0

@@ -50,13 +50,13 @@ data LatLng = LatLng
 data UserType = Nobody {nbId :: Int} | Normal {normalId :: Int} | Admin {adminId :: Int}
   deriving (Show, Eq, Generic, ToJSON, FromJSON)
 
-instance ToParam UserType 'QueryParam
-instance ToParam LatLng 'QueryParam
+instance ToParam 'QueryParam UserType
+instance ToParam 'QueryParam LatLng
 
-instance ToParam UserQuery 'QueryParam
-instance ToParam User 'QueryParam
+instance ToParam 'QueryParam UserQuery
+instance ToParam 'QueryParam User
 
-instance ToParam Locations 'QueryParam
+instance ToParam 'QueryParam Locations
 
 instance ApiContract TestApp GET UserR where
   type QueryParam GET UserR = UserQuery

@@ -79,11 +79,11 @@ type family ConsoleCtx api m r :: Constraint where
                        , ToWidget (HeaderIn m r)
                        , ToWidget (CookieIn m r)
                        , ToPathParamWidget (PathParam m r) (IsTuple (PathParam m r))
-                       , ToParam (PathParam m r) 'PathParam
-                       , ToParam (QueryParam m r) 'QueryParam
-                       , ToParam (FormParam m r) 'FormParam
+                       , ToParam 'PathParam (PathParam m r)
+                       , ToParam 'QueryParam (QueryParam m r)
+                       , ToParam 'FormParam (FormParam m r)
                        , ToHeader (HeaderIn m r)
-                       , ToParam (FileParam m r) 'FileParam
+                       , ToParam 'FileParam (FileParam m r)
                        , FromHeader (HeaderOut m r)
                        , Decodings (ContentTypes m r) (ApiOut m r)
                        , Decodings (ContentTypes m r) (ApiErr m r)
