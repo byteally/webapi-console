@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module WebApi.PageTemplate where
 
 import Reflex.Dom hiding (link)

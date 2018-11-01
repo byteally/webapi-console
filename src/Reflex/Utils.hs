@@ -1,6 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Reflex.Utils
        ( module Reflex.Utils
        , module Reflex.Utils.Dynamic
@@ -17,11 +18,12 @@ import Control.Lens (imapM)
 import Data.Map as Map hiding (map, fst)
 import Control.Monad.IO.Class (liftIO)
 import Reflex.Utils.Dynamic
+import Data.String
 
 mkSwitchableAttrs :: MonadWidget t m
-                  => [(Event t a, Map String String)]
-                  -> [(Event t a, Map String String)] -- accumulator
-                  -> m [Dynamic t (Map String String)]
+                  => [(Event t a, Map Text Text)]
+                  -> [(Event t a, Map Text Text)] -- accumulator
+                  -> m [Dynamic t (Map Text Text)]
 mkSwitchableAttrs [] _ = return []
 mkSwitchableAttrs (y:ys) acc =  do
   let acc' = y : acc
@@ -37,9 +39,9 @@ mkSwitchableAttrs (y:ys) acc =  do
     addActive defAttr b = if b then Map.insertWith (\x y -> x <> " " <> y) "class" "active" defAttr else defAttr
 
 dropdownTabDisplay :: forall t m k. (MonadFix m, MonadWidget t m, Show k, Ord k)
-  => String               -- ^ Class applied to <ul> element
-  -> String               -- ^ Class applied to currently active <li> element
-  -> Map k (String, (Event t () -> m ())) -- ^ Map from (arbitrary) key to (tab label, child widget)
+  => Text               -- ^ Class applied to <ul> element
+  -> Text               -- ^ Class applied to currently active <li> element
+  -> Map k (Text, (Event t () -> m ())) -- ^ Map from (arbitrary) key to (tab label, child widget)
   -> m ()
 dropdownTabDisplay ulClass activeClass tabItems = do
   (dCurrentTab, dTabClicks, onSubmit) <- divClass "endpoint-selector" $ do
@@ -54,7 +56,7 @@ dropdownTabDisplay ulClass activeClass tabItems = do
     (sendEl , _) <- elAttr' "button" ("class" =: "send") $ text "Send"
     return (dCurrentTab, dTabClicks, _el_clicked sendEl)
   divClass "wrapper" $ do
-    let dTabs :: Dynamic t (Map k (String, (Event t () -> m ()))) = constDyn tabItems
+    let dTabs :: Dynamic t (Map k (Text, (Event t () -> m ()))) = constDyn tabItems
     _ <- listWithKey dTabs (\k dTab -> do
       dAttrs <- mapDyn (\sel -> do
         let t1 = listToMaybe $ Map.keys tabItems
@@ -65,18 +67,18 @@ dropdownTabDisplay ulClass activeClass tabItems = do
     return ()
   where
     getFirstItemName x = if Map.null x then "" else (fst . snd . head . toList) x
-    headerBarLink :: (MonadWidget t m, Ord k) => String -> k -> Dynamic t Bool -> m (Event t k)
+    headerBarLink :: (MonadWidget t m, Ord k) => Text -> k -> Dynamic t Bool -> m (Event t k)
     headerBarLink x k dBool = do
       dAttributes <- mapDyn (\b -> if b then Map.singleton "class" activeClass else Map.empty) dBool
       (elem, _) <- elDynAttr' "li" dAttributes $ text x
       return $ fmap (const k) (_el_clicked elem)
 
-button' :: MonadWidget t m => String -> String -> m (Event t ())
+button' :: MonadWidget t m => Text -> Text -> m (Event t ())
 button' cls txt = do
   (e, _) <- elAttr' "button" ("class" =: cls) $ text txt
   return (_el_clicked e)
 
-clickableSpan :: MonadWidget t m => String -> Dynamic t (Map String String) -> m (Event t ())
+clickableSpan :: MonadWidget t m => Text -> Dynamic t (Map Text Text) -> m (Event t ())
 clickableSpan txt attrs = do
   (e, _) <- elDynAttr' "span" attrs $ text txt
   return (_el_clicked e)

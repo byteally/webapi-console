@@ -37,8 +37,8 @@ getFunInfoQ' dispName' name = do
         _                    -> error "Unable to get Func Info. Expecting only Global function name"
       funQ ty = sigE (varE name) (return ty)
   case info of
-    VarI n ty _ _ -> [| (qualName , PrjFnInfo (toDynamic (Dict :: Dict (Eq Int)))  {-(toDynamic $(funQ ty))-}  (WidgetBox (Proxy :: Proxy Bool)) (pkgName qualName) (modName qualName) dispName) |]
-    ClassOpI n ty parent _ -> do
+    VarI n ty _ -> [| (qualName , PrjFnInfo (toDynamic (Dict :: Dict (Eq Int)))  {-(toDynamic $(funQ ty))-}  (WidgetBox (Proxy :: Proxy Bool)) (pkgName qualName) (modName qualName) dispName) |]
+    ClassOpI n ty parent -> do
       vInst <- reify parent
       error $ show vInst
       [| (qualName , PrjFnInfo undefined {-(toDynamic $(funQ ty))-}  (WidgetBox (Proxy :: Proxy Bool)) (pkgName qualName) (modName qualName) dispName) |]

@@ -16,7 +16,6 @@ import WebApi.Console.TH
 data TestApp
 
 instance WebApi TestApp where
-  type Version TestApp = MajorMinor '(0, 1)
   type Apis TestApp = '[ Route '[GET] UserR
                        , Route '[GET] ProfileR
                        ]

@@ -8,14 +8,14 @@ module WebApi.Console
 --       , module WebApi.Console.TH
        ) where
 
-import Data.JSString ()
+--import Data.JSString ()
 import qualified Data.Map as M
 import qualified Data.Map.Lazy as LM
 import Data.Maybe
 import Data.Either (either)
 import Data.Tree
-import GHCJS.Types
-import Reflex.Dom as RD
+--import GHCJS.Types
+import Reflex.Dom as RD hiding (Request, Response)
 import Data.Either
 import Data.Proxy
 import Data.Aeson as A hiding (Success)
@@ -28,7 +28,7 @@ import           Data.CaseInsensitive  ( original )
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as ASCII
-import Data.ByteString.Lazy (toStrict)
+import Data.ByteString.Lazy (toStrict, fromStrict)
 import qualified Data.Text as T
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
@@ -67,7 +67,7 @@ import Data.Time.Clock
 import Data.Time.Calendar
 import Data.Time.LocalTime
 
-foreign import javascript unsafe "console.log($1)" js_log :: JSString -> IO ()
+--foreign import javascript unsafe "console.log($1)" js_log :: JSString -> IO ()
 
 type family ConsoleCtx api m r :: Constraint where
   ConsoleCtx api m r = ( ApiContract api m r
@@ -155,6 +155,8 @@ apiConsole :: forall api apis routes.
              , AllContracts api apis
              ) => ConsoleConfig -> Proxy api -> IO ()
 apiConsole config api = do
+  mainWidgetWithHead pageTemplate $ apiConsoleWidget config api
+{-  
   let routes = singRoutes api (Proxy :: Proxy apis)
       getPathSegs :: forall t m rs.MonadWidget t m => SingRoute api rs -> [(Method, Text, (Event t () -> m (Event t ())))]
       getPathSegs (RouteCons pxyM pxyR rs)
@@ -165,9 +167,10 @@ apiConsole config api = do
              , (\x -> paramWidget api pxyM pxyR (baseURI config) (functions config) pathSegs x)
              ) : (getPathSegs rs)
       getPathSegs RouteNil           = []
-      routeSegs = getPathSegs routes
+      routeSegs = getPathSegs routes :: _
       getPathParPxy :: Typeable (PathParam m r) => Proxy m -> Proxy r -> Proxy (PathParam m r)
       getPathParPxy _ _ = Proxy
+  
   mainWidgetWithHead pageTemplate $ do
     el "main" $ do
       el "header" $ do
@@ -175,9 +178,41 @@ apiConsole config api = do
         el "small" $ text "v0.1.0"
       divClass "apiconsole" $ do
         dropdownTabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $
-          \(m, r, paramWid) -> ((show (m, r)), ((ASCII.unpack m <> ": " <> T.unpack r), (void . paramWid)))
+          \(m, r, paramWid) -> ((show (m, r)), ((T.pack (ASCII.unpack m) <> ": " <> r), (void . paramWid)))
     return ()
+-}
 
+apiConsoleWidget :: forall api apis routes m t.
+  ( WebApi api
+  , apis ~ Apis api
+  , routes ~ (FlattenRoutes apis)
+  , SingRoutes api apis
+  , AllContracts api apis
+  , MonadWidget t m
+  ) => ConsoleConfig -> Proxy api -> m ()
+apiConsoleWidget config api = do
+  let routes = singRoutes api (Proxy :: Proxy apis)
+      getPathSegs :: forall rs.SingRoute api rs -> [(Method, Text, (Event t () -> m (Event t ())))]
+      getPathSegs (RouteCons pxyM pxyR rs)
+        = let routeTpl = T.intercalate "/" $ mkRouteTplStr pathSegs (getDynTyRep $ getPathParPxy pxyM pxyR)
+              pathSegs = mkPathFormatString pxyR
+          in ( singMethod pxyM
+             , routeTpl
+             , (\x -> paramWidget api pxyM pxyR (baseURI config) (functions config) pathSegs x)
+             ) : (getPathSegs rs)
+      getPathSegs RouteNil           = []
+      routeSegs = getPathSegs routes
+      getPathParPxy :: Typeable (PathParam meth r) => Proxy meth -> Proxy r -> Proxy (PathParam meth r)
+      getPathParPxy _ _ = Proxy
+
+  el "main" $ do
+    el "header" $ do
+      el "h1" $ text "WebApi Console"
+      el "small" $ text "v0.1.0"
+    divClass "apiconsole" $ do
+      dropdownTabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $
+          \(m, r, paramWid) -> ((show (m, r)), ((T.pack (ASCII.unpack m) <> ": " <> r), (void . paramWid)))
+  
 getDynTyRep :: Typeable a => Proxy a -> [Text]
 getDynTyRep pth = map (T.pack . wrapBrace . show) $ case typeRepArgs $ typeRep pth of
   ts@(_ : _) -> ts
@@ -260,7 +295,7 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
           modifyAttr (x:xs) = do
             xs' <- modifyAttr xs
             return $ hideIfUnit x : xs'
-          hideIfUnit :: (Dynamic t (Map String String), Bool) -> Dynamic t (Map String String)
+          hideIfUnit :: (Dynamic t (Map Text Text), Bool) -> Dynamic t (Map Text Text)
           hideIfUnit (x, False) = x
           hideIfUnit (x, True) =
             let cls = "class" =: "hide"
@@ -324,8 +359,8 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
                                                                 methDyn
         formParMapDyn <- mapDyn (fmap (toFormParam . formParam)) requestDyn
         encodedFormParDyn <- mapDyn ((fromMaybe "") . fmap (renderSimpleQuery False)) formParMapDyn
-        linkDyn <- mapDyn ((fromMaybe "") . (fmap (\req -> show $ WebApi.link (undefined :: meth, undefined :: r) baseUrl (pathParam req) (Just $ queryParam req)))) requestDyn
-        let toHdrStrs hdrs = M.fromList $ fmap (\(k, v) -> (ASCII.unpack $ original k, ASCII.unpack v)) hdrs
+        linkDyn <- mapDyn ((fromMaybe "") . (fmap (\req -> T.pack $ show $ WebApi.link (undefined :: meth, undefined :: r) baseUrl (pathParam req) (Just $ queryParam req)))) requestDyn
+        let toHdrStrs hdrs = M.fromList $ fmap (\(k, v) -> (T.pack $ ASCII.unpack $ original k, T.pack $ ASCII.unpack v)) hdrs
         hdrIn <- mapDyn (fmap (toHdrStrs . toHeader . headerIn)) requestDyn
       return (linkDyn, encodedFormParDyn, hdrIn)
       -- display encodedFormParDyn
@@ -355,8 +390,8 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
         _ <- elDynAttr "div" respAttr $ do
           divClass "response" $ do
             divClass "title-text" $ text "response: "
-            let prettyOut :: ToJSON (ApiOut meth r) => Response meth r -> String
-                prettyOut (Success _ out _ _) = ASCII.unpack $ toStrict $ encodePretty out
+            let prettyOut :: ToJSON (ApiOut meth r) => Response meth r -> Text
+                prettyOut (Success _ out _ _) = T.pack $ ASCII.unpack $ toStrict $ encodePretty out
                 prettyOut _                   = "Error getting response"
             el "pre" $ dynText =<< (holdDyn ("{}") $ fmap prettyOut response)
             --dynText =<< (holdDyn ("Loading..") $ fmap (either (const "Error getting response") (T.unpack . snd)) res)
@@ -365,7 +400,7 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
             (statusAssert, statusMsgAssert) <- divClass "status-assert" $ do
               divClass "title-text" $ text "Response"
               statusAssert <- divClass "div field" $ do
-                dropdown "Status Code" (constDyn (("Status Code" =: "Status Code") :: Map String String)) $ def
+                dropdown "Status Code" (constDyn (("Status Code" =: "Status Code") :: Map Text Text)) $ def
                   & attributes .~ constDyn ("class" =: "assert-field-select")
                 divClass "field-assertion" $ do
                   let defKey = "-- No Selection --" :: Text
@@ -378,7 +413,7 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
                   elDynAttr "div" assertWidgetAttr $ do
                     toWidget (Proxy :: Proxy Int) Nothing
               statusMsgAssert <- divClass "div field" $ do
-                dropdown "Status Message" (constDyn (("Status Message" =: "Status Message") :: Map String String)) $ def
+                dropdown "Status Message" (constDyn (("Status Message" =: "Status Message") :: Map Text Text)) $ def
                   & attributes .~ constDyn ("class" =: "assert-field-select")
                 divClass "field-assertion" $ do
                   let defKey = "-- No Selection --" :: Text
@@ -456,7 +491,7 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
                 divClass "title-text inline-block" $ text "Add Assertion"
                 elAttr' "span" ("class" =: "close-modal") $ text "x"
               divClass "modal-body" $ do
-                let selNameMap = fromList $ map ((\x -> ("." <> x, T.unpack x)) . selectorName) $ filterSInfo . concat . map flatten $ selectorInfos prxy []
+                let selNameMap = fromList $ map ((\x -> ("." <> x, x)) . selectorName) $ filterSInfo . concat . map flatten $ selectorInfos prxy []
                     filterSInfo []                 = []
                     filterSInfo (SInfo sn st : xs) = SInfo sn st : filterSInfo xs
                     filterSInfo (_:xs)             = filterSInfo xs
@@ -468,14 +503,14 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
                           & setValue .~ (fmap (("." <>) . selectorName) onNodeSelect)
                   onAddAssr <- button' "modal-add" "Add +"
                   (addWgtDynList :: [(Text, (Dynamic t (Maybe R1D.Dynamic), Dynamic t GName))]) <- forM (filterSInfo . concat . map flatten $ selectorInfos prxy []) $ \si -> do
-                    let displayNone = ("style" =: "display:none") :: Map String String
+                    let displayNone = ("style" =: "display:none") :: Map Text Text
                     --isVisibleDyn <- holdDyn False $ fmap (== si) onNodeSelect
                     attr <- holdDyn displayNone $ fmap (\x -> if x == si then ("style" =: "") else displayNone) onNodeSelect
                     case selectorType si of
                       WidgetBox p -> do
                         elDynAttr "div" attr $ do
                           let funTable' = funTable
-                              dropDownKV (n, fnInfo) = (n, displayName fnInfo)
+                              dropDownKV (n, fnInfo) = (n, T.pack $ displayName fnInfo)
                           funcDd <- dropdown defAssertFnKey (constDyn (LM.fromList $ fmap dropDownKV $ HM.toList funTable')) def
                           dyn <- mapDyn (fmap toDynamic) =<< renderAssertWidget p Nothing
                           return (selectorName si, (dyn, _dropdown_value funcDd))
@@ -499,12 +534,12 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
       return $ leftmost evts
       where
         renderTree (Node t@(SInfo txt _) ts) = do
-          (elem, _) <- el' "li" $ text . T.unpack $ txt
+          (elem, _) <- el' "li" $ text txt
           el "ul" $ do
             evt <- el "li" $ renderForest ts
             return $ leftmost [fmap (const t) (domEvent Click elem), evt]
         renderTree (Node (SumConName txt) ts) = do
-          el "li" $ text . T.unpack $ txt
+          el "li" $ text txt
           el "ul" $ do
             evt <- el "li" $ renderForest ts
             return evt
@@ -540,9 +575,9 @@ mkResponse status respBodyBS =
 decodeResponse :: ( Decodings (ContentTypes m r) a
           ) => apiRes m r -> ByteString -> Either String a
 decodeResponse r o = case (Just "application/json") of -- TODO: Needs Response header from reflex
-  Just ctype -> let decs = decodings (reproxy r) o
+  Just ctype -> let decs = decodings (reproxy r) (fromStrict o)
                in maybe (firstRight (map snd decs)) id (mapContentMedia decs ctype)
-  Nothing    -> firstRight (map snd (decodings (reproxy r) o))
+  Nothing    -> firstRight (map snd (decodings (reproxy r) (fromStrict o)))
   where
     reproxy :: apiRes m r -> Proxy (ContentTypes m r)
     reproxy = const Proxy
@@ -577,7 +612,7 @@ instance (CtorInfo x, CtorInfo y) => CtorInfo (x :+: y) where
 instance (Constructor c) => CtorInfo (C1 c f) where
   constructorNames _ = [T.pack $ conName (undefined :: t c f a)]
 
-type DynamicAttr t = Dynamic t (Map String String)
+type DynamicAttr t = Dynamic t (Map Text Text)
 
 data GToWidgetState t = GToWidgetState
   { st_constructors :: (Event t Text, M.Map Text (DynamicAttr t))
@@ -607,7 +642,7 @@ instance (GToWidget f, CtorInfo f) => GToWidget (D1 c f) where
     case ctorNames of
       (firstCtor:_:_) -> do  -- SumType
         divClass "sum-wrapper" $ do
-          let ctorNameMap = M.fromList $ map (\x -> (x, T.unpack x)) ctorNames
+          let ctorNameMap = M.fromList $ map (\x -> (x, x)) ctorNames
           dd <- dropdown firstCtor (constDyn ctorNameMap) $ def
           sumTyAttrMap <- (return . M.fromList) =<< mapM (\c -> do
             cDyn <- mapDyn (\ddVal -> if ddVal == c then ("class" =: "sum-ty active") else ("class" =: "sum-ty")) (_dropdown_value dd)
@@ -679,7 +714,7 @@ instance (GToWidget f, Typeable f, Constructor c) => GToWidget (C1 c f) where
         mapDyn (fmap M1) =<< (gToWidget gopts')
       _ -> do
         elClass "fieldset" "nested-field field" $ do
-          el "legend" $ text $ conName (undefined :: C1 c f ())
+          el "legend" $ text $ T.pack $ conName (undefined :: C1 c f ())
           divClass "field" $ mapDyn (fmap M1) =<< (gToWidget gopts')
 
 instance GToWidget U1 where
@@ -693,7 +728,7 @@ instance (GToWidget f, Selector s) => GToWidget (S1 s f) where
     let wDef' = fmap (\(M1 a) -> a) wDef
         gopts' = GToWidgetOpts Nothing wDef' Nothing
     elClass "div" "field" $ do
-      elAttr "label" ("class" =: "label") $ text $ selName (undefined :: S1 s f ())
+      elAttr "label" ("class" =: "label") $ text $ T.pack $ selName (undefined :: S1 s f ())
       inp <- gToWidget gopts'
       mapDyn (fmap M1) inp
 
@@ -714,9 +749,9 @@ instance ToWidget Text where
                 & attributes .~ constDyn ("class" =: "text-box")
         textDef = case wDef of
           Nothing -> def'
-          Just a -> def' & textInputConfig_initialValue .~ T.unpack a
+          Just a -> def' & textInputConfig_initialValue .~ a
     txt <- textInput textDef
-    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack . T.unpack) $ _textInput_value txt
 
 instance ToWidget Int where
   toWidget _ wDef = do
@@ -725,9 +760,9 @@ instance ToWidget Int where
                 & attributes .~ constDyn ("class" =: "text-box")
         intDef = case wDef of
           Nothing -> def'
-          Just a -> def' & textInputConfig_initialValue .~ show a
+          Just a -> def' & textInputConfig_initialValue .~ (T.pack $ show a)
     txt <- textInput intDef
-    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack . T.unpack) $ _textInput_value txt
 
 instance ToWidget Double where
   toWidget _ wDef = do
@@ -736,9 +771,9 @@ instance ToWidget Double where
                 & attributes .~ constDyn ("class" =: "text-box")
         doubleDef = case wDef of
           Nothing -> def'
-          Just a -> def' & textInputConfig_initialValue .~ show a
+          Just a -> def' & textInputConfig_initialValue .~ (T.pack $ show a)
     txt <- textInput doubleDef
-    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack . T.unpack) $ _textInput_value txt
 
 instance ToWidget Bool where
   toWidget _ wDef = do
@@ -752,40 +787,40 @@ instance ToWidget UTCTime where
   toWidget _ wDef = do
     let def' = def
                 & attributes .~ constDyn ("class" =: "text-box")
-        utcDef = maybe def' (\a -> def' & textInputConfig_initialValue .~ (ASCII.unpack . encodeParam $ a)) wDef
+        utcDef = maybe def' (\a -> def' & textInputConfig_initialValue .~ (T.pack . ASCII.unpack . encodeParam $ a)) wDef
     txt <- textInput utcDef
     dynText $ _textInput_value txt
-    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack . T.unpack) $ _textInput_value txt
 
 instance ToWidget LocalTime where
   toWidget _ wDef = do
     let def' = def
                 & textInputConfig_inputType .~ "datetime-local"
                 & attributes .~ (constDyn $ M.fromList [("class", "text-box"), ("step", "1")])
-        timeDef = maybe def' (\a -> def' & textInputConfig_initialValue .~ (ASCII.unpack . encodeParam $ a)) wDef
+        timeDef = maybe def' (\a -> def' & textInputConfig_initialValue .~ (T.pack . ASCII.unpack . encodeParam $ a)) wDef
     txt <- textInput timeDef
     dynText $ _textInput_value txt
-    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack . T.unpack) $ _textInput_value txt
 
 instance ToWidget Day where
   toWidget _ wDef = do
     let def' = def
                 & textInputConfig_inputType .~ "date"
                 & attributes .~ constDyn ("class" =: "text-box")
-        dayDef = maybe def' (\a -> def' & textInputConfig_initialValue .~ (ASCII.unpack . encodeParam $ a)) wDef
+        dayDef = maybe def' (\a -> def' & textInputConfig_initialValue .~ (T.pack . ASCII.unpack . encodeParam $ a)) wDef
     txt <- textInput dayDef
     dynText $ _textInput_value txt
-    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack . T.unpack) $ _textInput_value txt
 
 instance ToWidget TimeOfDay where
   toWidget _ wDef = do
     let def' = def
                 & textInputConfig_inputType .~ "time"
                 & attributes .~ (constDyn $ M.fromList [("class", "text-box"), ("step", "1")])
-        todDef = maybe def' (\a -> def' & textInputConfig_initialValue .~ (ASCII.unpack . encodeParam $ a)) wDef
+        todDef = maybe def' (\a -> def' & textInputConfig_initialValue .~ (T.pack . ASCII.unpack . encodeParam $ a)) wDef
     txt <- textInput todDef
     dynText $ _textInput_value txt
-    mapDyn (decodeParam . ASCII.pack) $ _textInput_value txt
+    mapDyn (decodeParam . ASCII.pack . T.unpack) $ _textInput_value txt
 
 
 instance ToWidget a => ToWidget [a] where
@@ -811,7 +846,7 @@ instance ToWidget a => ToWidget [a] where
           let addEvt = _el_clicked addEvtEl
       mapDyn (sequence . (map snd) . M.toList) modelD
     where
-      fn :: MonadSample t m => [Dynamic t (Maybe a)] -> m (Maybe [a])
+      fn :: (Reflex t, MonadSample t m) => [Dynamic t (Maybe a)] -> m (Maybe [a])
       fn = (\model -> do
         model' <- mapM (sample . current) model
         return $ sequence model'
@@ -1073,7 +1108,7 @@ instance (GAssert f, Typeable f, Constructor c) => GAssert (C1 c f) where
         mapDyn (contramap unM1) =<< gAssert Proxy gs
       _ -> do
         elClass "fieldset" "nested-field field" $ do
-          el "legend" $ text $ conName (undefined :: C1 c f ())
+          el "legend" $ text $ T.pack $ conName (undefined :: C1 c f ())
           divClass "field" $ mapDyn (contramap unM1) =<< gAssert Proxy gs
 
 instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, AssertWidget f1) => GAssert (S1 s f) where
@@ -1124,15 +1159,15 @@ instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, Assert
           mapDyn (combinePredicates . (map snd) . M.toList) modelD
       createWidget k (AddEvtPayload _ mDyn sFunc) _ = do
         el "div" $ do
-          let sName = selName (undefined :: S1 s f ())
+          let sName = T.pack $ selName (undefined :: S1 s f ())
           dropdown sName (constDyn (sName =: sName)) $ def
             & attributes .~ constDyn ("class" =: "assert-field-select")
           (removeEl, _) <- elAttr' "span" ("class" =: "assert-remove") $ text "-"
           dyn <- divClass "field-assertion" $ do
             let defKey = defAssertFnKey
                 assertWidgetAttr = ("class" =: "assert-widget")
-                fldname = fname <> "." <> T.pack sName
-                dropDownKV (n, fnInfo) = (n, displayName fnInfo)
+                fldname = fname <> "." <> sName
+                dropDownKV (n, fnInfo) = (n, T.pack $ displayName fnInfo)
             dd <- dropdown sFunc (constDyn (LM.fromList $ fmap dropDownKV $ HM.toList funTable')) def
             let lookupPredFn fnKey = maybe (error "Unknown Fn1") prjFnDyn $ HM.lookup fnKey funTable'
             let succeed _ _ = True
@@ -1145,15 +1180,15 @@ instance (GAssert f, Selector s, f ~ (K1 c f1), ToWidget f1, Typeable f1, Assert
       createAssertWidget wgtShowEvt = do
         rec wgtShowAttr <- toggleWidgetOn wgtShowEvt rmEvt
             (predDyn, rmEvt) <- elDynAttr "div" wgtShowAttr $ do
-              let sName = selName (undefined :: S1 s f ())
-                  fldname = fname <> "." <> T.pack sName
+              let sName = T.pack $ selName (undefined :: S1 s f ())
+                  fldname = fname <> "." <> sName
               dropdown sName (constDyn (sName =: sName)) $ def
                 & attributes .~ constDyn ("class" =: "assert-field-select")
               (removeEl, _) <- elAttr' "span" ("class" =: "assert-remove") $ text "-"
               --elAttr "label" ("class" =: "label") $ text $ selName (undefined :: S1 s f ())
               dyn <- divClass "field-assertion" $ do
                 el "div" $ do
-                  mapDyn (contramap unM1 . contramap unK1) =<< assertWidget (Proxy :: Proxy f1) (GAssertState (fname <> "." <> T.pack sName) Nothing gAddEvt conFuns)
+                  mapDyn (contramap unM1 . contramap unK1) =<< assertWidget (Proxy :: Proxy f1) (GAssertState (fname <> "." <> sName) Nothing gAddEvt conFuns)
               return (dyn, _el_clicked removeEl)
         return predDyn
       mkPred :: R1D.Dynamic -> Maybe f1 -> Predicate f1
@@ -1282,25 +1317,25 @@ emptyParamWidget ::  MonadWidget t m => m (Dynamic t (Maybe ()))
 emptyParamWidget = return $ constDyn $ Just ()
 
 staticPthWid :: MonadWidget t m => Bool -> PathSegment -> m ()
-staticPthWid sep (StaticSegment spth) = el "div" $ text $ (T.unpack spth) ++ if sep then "/" else ""
+staticPthWid sep (StaticSegment spth) = el "div" $ text $ spth <> if sep then "/" else ""
 staticPthWid _ Hole = error "Invariant Violated @staticPthWid! Found Dynamic Hole"
 
 mkXhrReq :: Reflex t
          => Dynamic t Text
-         -> Dynamic t String
+         -> Dynamic t Text
          -> Dynamic t BS.ByteString
-         -> Dynamic t (Maybe (Map String String))
-         -> PullM t XhrRequest
+         -> Dynamic t (Maybe (Map Text Text))
+         -> PullM t (XhrRequest Text)
 mkXhrReq methD urlD fpD hdrInD = do
   meth <- sample . current $ methD
   url  <- sample . current $ urlD
   fp   <- sample . current $ fpD
   hdrIn <- (fromMaybe M.empty) <$> (sample . current $ hdrInD)
   let headerUrlEnc = if BS.null fp then hdrIn else M.insert "Content-type" "application/x-www-form-urlencoded" hdrIn
-      body = ASCII.unpack fp
-  return $ XhrRequest (T.unpack meth) url
+      body = T.pack $ ASCII.unpack fp
+  return $ XhrRequest meth url
             $ def { _xhrRequestConfig_headers = headerUrlEnc
-                  , _xhrRequestConfig_sendData = Just body
+                  , _xhrRequestConfig_sendData = body
                   }
 
 combinePredicates :: [Predicate a] -> Predicate a
