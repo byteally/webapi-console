@@ -20,7 +20,10 @@ import Data.Either
 import Data.Proxy
 import Data.Aeson as A hiding (Success)
 import Data.Typeable
-import WebApi
+import WebApi.Contract
+import WebApi.Util
+import WebApi.Param as WebApi
+import WebApi.ContentTypes
 import GHC.Exts
 import Network.URI
 import Data.List
@@ -41,8 +44,6 @@ import Control.Arrow ((&&&))
 import Control.Monad
 import Control.Monad.IO.Class
 import GHC.Generics
-import WebApi.Client
-import WebApi.Internal (getContentType)
 import WebApi.PageTemplate
 --import WebApi.Console.TH
 --import WebApi.Assertion hiding (ToWidget)
@@ -156,31 +157,6 @@ apiConsole :: forall api apis routes.
              ) => ConsoleConfig -> Proxy api -> IO ()
 apiConsole config api = do
   mainWidgetWithHead pageTemplate $ apiConsoleWidget config api
-{-  
-  let routes = singRoutes api (Proxy :: Proxy apis)
-      getPathSegs :: forall t m rs.MonadWidget t m => SingRoute api rs -> [(Method, Text, (Event t () -> m (Event t ())))]
-      getPathSegs (RouteCons pxyM pxyR rs)
-        = let routeTpl = T.intercalate "/" $ mkRouteTplStr pathSegs (getDynTyRep $ getPathParPxy pxyM pxyR)
-              pathSegs = mkPathFormatString pxyR
-          in ( singMethod pxyM
-             , routeTpl
-             , (\x -> paramWidget api pxyM pxyR (baseURI config) (functions config) pathSegs x)
-             ) : (getPathSegs rs)
-      getPathSegs RouteNil           = []
-      routeSegs = getPathSegs routes :: _
-      getPathParPxy :: Typeable (PathParam m r) => Proxy m -> Proxy r -> Proxy (PathParam m r)
-      getPathParPxy _ _ = Proxy
-  
-  mainWidgetWithHead pageTemplate $ do
-    el "main" $ do
-      el "header" $ do
-        el "h1" $ text "WebApi Console"
-        el "small" $ text "v0.1.0"
-      divClass "apiconsole" $ do
-        dropdownTabDisplay "route-tab" "active-route-tab" $ LM.fromList $ (flip map) routeSegs $
-          \(m, r, paramWid) -> ((show (m, r)), ((T.pack (ASCII.unpack m) <> ": " <> r), (void . paramWid)))
-    return ()
--}
 
 apiConsoleWidget :: forall api apis routes m t.
   ( WebApi api
@@ -359,7 +335,7 @@ paramWidget api meth r baseUrl conFuns pathSegs onSubmit = divClass "box-wrapper
                                                                 methDyn
         formParMapDyn <- mapDyn (fmap (toFormParam . formParam)) requestDyn
         encodedFormParDyn <- mapDyn ((fromMaybe "") . fmap (renderSimpleQuery False)) formParMapDyn
-        linkDyn <- mapDyn ((fromMaybe "") . (fmap (\req -> T.pack $ show $ WebApi.link (undefined :: meth, undefined :: r) baseUrl (pathParam req) (Just $ queryParam req)))) requestDyn
+        linkDyn <- mapDyn ((fromMaybe "") . (fmap (\req -> T.pack $ show $ WebApi.link (undefined :: meth, undefined :: r) (ASCII.pack $ uriPath baseUrl) (pathParam req) (Just $ queryParam req)))) requestDyn
         let toHdrStrs hdrs = M.fromList $ fmap (\(k, v) -> (T.pack $ ASCII.unpack $ original k, T.pack $ ASCII.unpack v)) hdrs
         hdrIn <- mapDyn (fmap (toHdrStrs . toHeader . headerIn)) requestDyn
       return (linkDyn, encodedFormParDyn, hdrIn)

@@ -4,7 +4,8 @@
 
 module TestApi where
 
-import WebApi
+import WebApi.Contract
+import WebApi.Param
 import GHC.Generics
 import Data.Text
 import Data.Aeson
@@ -60,10 +61,12 @@ instance ToParam 'QueryParam Locations
 instance ApiContract TestApp GET UserR where
   type QueryParam GET UserR = UserQuery
   type ApiOut GET UserR = User
+  type ApiErr GET UserR = ()
 
 instance ApiContract TestApp GET ProfileR where
   type QueryParam GET ProfileR = User
   type ApiOut GET ProfileR = ()
+  type ApiErr GET ProfileR = ()
 
 instance ToWidget UserType
 instance AssertWidget UserType
