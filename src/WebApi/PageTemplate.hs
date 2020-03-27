@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module WebApi.PageTemplate where
 
-import Reflex.Dom hiding (link)
+import Reflex.Dom.Core hiding (link)
 import Data.Monoid ((<>))
-import Control.Monad.IO.Class (MonadIO)
+--import Control.Monad.IO.Class (MonadIO)
 
-pageTemplate :: (MonadWidget t m, MonadIO m) => m ()
+pageTemplate :: (DomBuilder t m) => m ()
 pageTemplate = do
     let meta attrs = elAttr "meta" attrs $ return ()
         link attrs = elAttr "link" attrs $ return ()

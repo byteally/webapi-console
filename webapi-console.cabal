@@ -21,23 +21,24 @@ data-dir:            static
 
 library
   hs-source-dirs:      src
-  ghc-options:         -Wall -O2
+  ghc-options:         -Wall
   exposed-modules:     WebApi.Console
                        WebApi.PageTemplate
-                       WebApi.Console.TH
+--                       WebApi.Console.TH
   other-modules:       Reflex.Utils
-                       Reflex.Utils.Dynamic
-                       WebApi.Console.Function
+--                       WebApi.Console.Function
   build-depends:       base >= 4.7 && < 5
                      , ghcjs-dom
+                     , jsaddle == 0.9.*
                      , template-haskell
-                     , reflex       == 0.5.*
-                     , reflex-dom   == 0.4.*
+                     , reflex            >= 0.6.4 && < 0.7
+                     , reflex-dom-core   >= 0.5.3 && < 0.6
+                     , webapi-client-reflex-dom >= 0.1.0.0
                      , webapi-contract       == 0.4.*
                      , text
                      , network-uri  == 2.6.*
                      , http-types   >= 0.8
-                     , http-media   == 0.6.*
+                     , http-media   == 0.8.*
                      , case-insensitive >= 1.2
                      , bytestring
                      , vector
@@ -45,12 +46,11 @@ library
                      , containers
                      , transformers >= 0.4
                      , lens         >= 4.13
-                     , rank1dynamic == 0.3.*
                      , unordered-containers == 0.2.*
                      , hashable      >= 1.2
-                     , contravariant == 1.4.*
                      , aeson-pretty  >= 0.7
-                     , time          >= 1.5 && <= 1.7
+                     , time          >= 1.8
+                     , primitive     < 0.7
   default-language:    Haskell2010
 
 executable webapi-console-test

@@ -1,0 +1,15 @@
+packages:
+ ./
+ ../webapi/webapi-client-reflex-dom
+
+source-repository-package
+    type: git
+    location: https://github.com/byteally/webapi 
+    tag: 49af199538f1045f420075fa8564d3d03deb8f6e
+    subdir: webapi-contract
+
+-- source-repository-package
+--     type: git
+--     location: https://github.com/byteally/webapi 
+--     tag: 49af199538f1045f420075fa8564d3d03deb8f6e
+--     subdir: webapi-client-reflex-dom
